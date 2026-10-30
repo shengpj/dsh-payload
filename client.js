@@ -66,6 +66,9 @@ window.__ModuleLoader__.load({
           reasonLabel: '触发原因',
           expandAll: '展开全部',
           collapseAll: '折叠全部',
+          toTop: '顶部',
+          toEnd: '末尾',
+          railTitle: '拖动滚动条可直达任意位置',
           close: '关闭',
         }
       : {
@@ -856,6 +859,20 @@ window.__ModuleLoader__.load({
       '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
+      /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
+         is thin and fades out, which makes dragging to the end a guessing game. */
+      '.dsh-pl-scroll{scrollbar-width:thin;',
+      'scrollbar-color:var(--dsw-alias-border-l2,rgba(127,127,127,.55)) transparent}',
+      '.dsh-pl-scroll::-webkit-scrollbar{width:12px;height:12px}',
+      '.dsh-pl-scroll::-webkit-scrollbar-track{background:transparent}',
+      '.dsh-pl-scroll::-webkit-scrollbar-thumb{',
+      'border:3px solid transparent;background-clip:padding-box;border-radius:8px;',
+      'background-color:var(--dsw-alias-border-l2,rgba(127,127,127,.45));',
+      'transition:background-color .12s ease}',
+      '.dsh-pl-scroll::-webkit-scrollbar-thumb:hover{',
+      'background-color:var(--dsw-alias-label-tertiary,#81858c);',
+      'border:3px solid transparent;background-clip:padding-box}',
+      '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
     ].join('');
 
     /** Install the trigger stylesheet once; failure only costs cosmetics. */
@@ -1069,6 +1086,15 @@ window.__ModuleLoader__.load({
       );
       const [mode, setMode] = React.useState('default');
       const [flash, setFlash] = React.useState('');
+      const bodyRef = React.useRef(null);
+
+      /* The payload is far taller than the viewport, so both a draggable scrollbar
+         (see the .dsh-pl-scroll rules) and one-click ends are needed. */
+      const jump = (where) => () => {
+        const node = bodyRef.current;
+        if (!node) return;
+        node.scrollTop = where === 'end' ? node.scrollHeight : 0;
+      };
 
       const index = calls.length ? Math.min(Math.max(selected, 0), calls.length - 1) : 0;
       const call = calls.length ? calls[index] : null;
@@ -1085,6 +1111,15 @@ window.__ModuleLoader__.load({
         totals.cache += itemUsage.cache || 0;
         totals.output += itemUsage.output || 0;
       }
+
+      /* A new call or a different expand mode is a different document: start at the top. */
+      React.useEffect(
+        () => {
+          const node = bodyRef.current;
+          if (node) node.scrollTop = 0;
+        },
+        [index, mode],
+      );
 
       const flashDone = (label) => () => {
         setFlash(label);
@@ -1184,6 +1219,32 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { key: 'actions', style: STYLE.headerActions },
+            h(
+              'button',
+              {
+                key: 'to-top',
+                type: 'button',
+                className: 'dsh-pl-btn',
+                onClick: jump('start'),
+                style: STYLE.smallButton,
+                title: TEXT.toTop,
+                'aria-label': TEXT.toTop,
+              },
+              '↑',
+            ),
+            h(
+              'button',
+              {
+                key: 'to-end',
+                type: 'button',
+                className: 'dsh-pl-btn',
+                onClick: jump('end'),
+                style: STYLE.smallButton,
+                title: TEXT.toEnd,
+                'aria-label': TEXT.toEnd,
+              },
+              '↓',
+            ),
             h(
               'button',
               {
@@ -1323,6 +1384,7 @@ window.__ModuleLoader__.load({
           'div',
           {
             key: 'steps',
+            className: 'dsh-pl-scroll',
             style: STYLE.stepList,
             role: 'listbox',
             'aria-label': TEXT.title,
@@ -1378,7 +1440,7 @@ window.__ModuleLoader__.load({
 
       const body = h(
         'div',
-        { key: 'body', style: STYLE.dialogBody },
+        { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody },
         call
           ? h(JsonNode, { key: mode + ':' + index, name: null, value: call.request, depth: 0, mode: mode, pal: pal })
           : h('div', { style: STYLE.note }, TEXT.empty),
