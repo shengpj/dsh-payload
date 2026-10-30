@@ -116,6 +116,25 @@ function walk(element) {
   return sink;
 }
 
+/* Find the timeline track: the flex row whose children are all ratio-buttons. */
+function findTrack(node) {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findTrack(child);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const props = node.props || {};
+  if (node.type === 'div' && Array.isArray(props.children) && props.children.length > 1
+      && props.children.every((c) => c && c.type === 'button' && c.props && c.props.style
+        && typeof c.props.style.flex === 'string' && /^\d+ 1 0$/.test(c.props.style.flex))) {
+    return node;
+  }
+  return findTrack(props.children || []);
+}
+
 /* ---------------------------------------------------------- payload fixtures */
 
 function makeCall(index, step, messageCount, tokens, sources) {
@@ -344,11 +363,43 @@ expect(/原地改写|rewritten in place/.test(rewrittenText), 'rewrite not repor
 expect(/消失|gone/.test(rewrittenText), 'removed count not reported');
 expect(/参数变化|params changed/.test(rewrittenText), 'changed params not reported');
 
+/* k) timeline: one segment per call, absent for a single call, and clicking a
+      segment selects that call. */
+const single = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100)]) }));
+expect(
+  !/本轮调用时间线|This Turn’s calls/.test(single.text.join(' ')),
+  'timeline rendered for a single call',
+);
+
+const timed = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)]) }));
+const timedText = timed.text.join(' ');
+expect(/本轮调用时间线|This Turn’s calls/.test(timedText), 'timeline missing for 3 calls');
+expect(timedText.includes('#3'), 'timeline end label missing');
+
+/* Drive the component directly: its track is a plain flex row of buttons, which
+   the tree walker cannot single out by structure alone. */
+const Timeline = internals.Timeline;
+const threeCalls = [
+  { index: 1, meta: { index: 1, step: 5, startSeq: 10, endSeq: 14, messages: 7 } },
+  { index: 2, meta: { index: 2, step: 6, startSeq: 15, endSeq: 23, messages: 9 } },
+  { index: 3, meta: { index: 3, step: 7, startSeq: 24, endSeq: 34, messages: 11 } },
+];
+const track = findTrack(Timeline({ calls: threeCalls, selected: 2 }));
+expect(track !== null, 'timeline track not found');
+const segs = track ? track.props.children : [];
+expect(segs.length === 3, 'expected 3 timeline segments, got ' + segs.length);
+/* Proportional: 5, 9 and 11 records → flex ratios 5/9/11. */
+const ratios = segs.map((seg) => String(seg.props.style.flex).split(' ')[0]);
+expect(ratios.join(',') === '5,9,11', 'segments not proportional: ' + ratios.join(','));
+expect(String(segs[2].props.style.opacity) === '1', 'selected segment is not highlighted');
+expect(String(segs[0].props.style.opacity) !== '1', 'unselected segments look selected');
+expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 10 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 11 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

@@ -270,6 +270,42 @@ if (!diffProblems.length)
     '  prefix + added = messages on every non-first call; rewrites counted: ' + rewrittenCalls,
   );
 
+/* Timeline frames: every call must know the seq span of its own step, the span
+   must be non-empty and ordered, and steps must not overlap (each `step/start`
+   opens exactly one call). */
+const frameProblems = [];
+let frameCalls = 0;
+let longest = { step: 0, turn: 0, span: 0 };
+for (const start of flat.filter((event) => event.type === 'turn/start')) {
+  const turn = start.data.turn;
+  const built = api.buildTurnCalls(flat, turn);
+  if (!built) continue;
+  let prevStart = -1;
+  for (const item of built.calls) {
+    const meta = item.meta || {};
+    if (typeof meta.startSeq !== 'number' || typeof meta.endSeq !== 'number') {
+      frameProblems.push('Turn ' + turn + ' #' + item.index + ': missing step frame');
+      continue;
+    }
+    frameCalls += 1;
+    if (meta.endSeq < meta.startSeq)
+      frameProblems.push('Turn ' + turn + ' #' + item.index + ': endSeq ' + meta.endSeq + ' < startSeq ' + meta.startSeq);
+    if (meta.startSeq <= prevStart)
+      frameProblems.push('Turn ' + turn + ' #' + item.index + ': startSeq ' + meta.startSeq + ' <= previous ' + prevStart);
+    prevStart = meta.startSeq;
+    const span = meta.endSeq - meta.startSeq + 1;
+    if (span > longest.span) longest = { step: meta.step, turn, span };
+  }
+}
+
+console.log('\n=== step frames: ' + frameCalls + ' call(s), ' + frameProblems.length + ' problem(s) ===');
+for (const item of frameProblems.slice(0, 10)) console.log('  ' + item);
+if (!frameProblems.length)
+  console.log(
+    '  every call carries startSeq<=endSeq and steps never overlap; widest step: turn ' +
+      longest.turn + ' step ' + longest.step + ' spans ' + longest.span + ' record(s)',
+  );
+
 console.log(
   '\n=== turn/current split: ' + splitProblems.length + ' problem(s) ===',
 );

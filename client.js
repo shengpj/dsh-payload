@@ -104,6 +104,10 @@ window.__ModuleLoader__.load({
           diffSame: '与上一次调用完全相同',
           diffFirst: '本轮第一次调用，没有可比较的上一次',
           diffPrevTitle: '上一次调用',
+          timelineTitle: '本轮调用时间线',
+          timelineHint: '每段是一步，宽度按该步在日志里占用的记录数',
+          timelineRecords: '条记录',
+          timelineSelected: '当前',
         }
       : {
           show: 'Request JSON',
@@ -180,6 +184,10 @@ window.__ModuleLoader__.load({
           diffSame: 'identical to the previous call',
           diffFirst: 'first call of this Turn — nothing to compare',
           diffPrevTitle: 'previous call',
+          timelineTitle: 'This Turn’s calls',
+          timelineHint: 'One segment per step, width by the records it wrote',
+          timelineRecords: 'records',
+          timelineSelected: 'selected',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -370,6 +378,43 @@ window.__ModuleLoader__.load({
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
+      },
+
+      /* ---- timeline: one bar per step, proportional to its seq span ---- */
+      timeline: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+      },
+      timelineHead: {
+        display: 'flex',
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        gap: '8px',
+        fontSize: '12px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      timelineTrack: {
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: '2px',
+        height: '10px',
+        borderRadius: '999px',
+        overflow: 'hidden',
+      },
+      timelineSeg: {
+        minWidth: '2px',
+        borderRadius: '2px',
+        cursor: 'pointer',
+        border: 'none',
+        padding: '0',
+      },
+      timelineLabels: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        fontSize: '11.5px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+        fontVariantNumeric: 'tabular-nums',
       },
 
       /* ---- source breakdown: one stacked bar, then the legend ---- */
@@ -1004,8 +1049,12 @@ window.__ModuleLoader__.load({
         const data = dataOf(event);
         if (turnNumber !== undefined && data.turn !== turnNumber) continue;
         const key = String(data.step);
-        const entry = responseByStep[key] || { cutSeq: undefined, source: null, usage: null };
+        const entry = responseByStep[key] || { cutSeq: undefined, source: null, usage: null, endSeq: undefined };
         if (entry.cutSeq === undefined) entry.cutSeq = seqOf(event);
+        /* The response is not the only thing a step writes: tool calls and tool
+           results follow it before the next step starts. The timeline needs the
+           whole span, so it closes at the last record carrying this step. */
+        entry.endSeq = seqOf(event);
         if (type === 'assistant/message' && data.usage && typeof data.usage === 'object') {
           entry.usage = data.usage;
         }
@@ -1015,6 +1064,18 @@ window.__ModuleLoader__.load({
           if (source) entry.source = source;
         }
         responseByStep[key] = entry;
+      }
+
+      /* Tool records belong to a step too, and they are what makes a step long
+         in wall-clock terms, so extend each entry over them. */
+      for (let i = 0; i < events.length; i += 1) {
+        const event = events[i];
+        const type = typeOf(event);
+        if (type !== 'tool/call' && type !== 'tool/result') continue;
+        const data = dataOf(event);
+        if (turnNumber !== undefined && data.turn !== turnNumber) continue;
+        const entry = responseByStep[String(data.step)];
+        if (entry) entry.endSeq = Math.max(entry.endSeq || 0, seqOf(event));
       }
 
       const calls = [];
@@ -1083,6 +1144,11 @@ window.__ModuleLoader__.load({
             turn: turnNumber,
             seq: cutSeq,
             step: stepInfo.step,
+            /* The seqs that frame this step in the log, so the timeline can size
+               it without re-scanning: startSeq is where it opened, endSeq is the
+               last record it wrote (response, tool calls, tool results). */
+            startSeq: stepInfo.seq,
+            endSeq: response && typeof response.endSeq === 'number' ? response.endSeq : stepInfo.seq,
             reason: header ? header.reason : null,
             startsSeries: header ? header.startsSeries : false,
             model: model,
@@ -1260,6 +1326,7 @@ window.__ModuleLoader__.load({
         locateMessage: locateMessage,
         callIndexForStep: callIndexForStep,
         DialogBody: DialogBody,
+        Timeline: Timeline,
         publishDialog: publishDialog,
       };
     }
@@ -1814,6 +1881,78 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The whole Turn at a glance: one segment per model call, sized by how many
+     * log records that step wrote (its request/response plus any tool round-trip).
+     *
+     * Records rather than milliseconds, because the session log records order and
+     * content but not timestamps — inventing a clock here would be a nicer-looking
+     * lie. Clicking a segment jumps to that call, which is the reason the timeline
+     * earns its space next to the tab strip.
+     */
+    function Timeline(props) {
+      const calls = Array.isArray(props.calls) ? props.calls : [];
+      const onSelect = props.onSelect;
+      const pal = props.pal || PALETTES.light;
+      if (calls.length < 2) return null;
+
+      const spans = calls.map((item) => {
+        const meta = item.meta || {};
+        const start = typeof meta.startSeq === 'number' ? meta.startSeq : 0;
+        const end = typeof meta.endSeq === 'number' ? meta.endSeq : start;
+        return Math.max(1, end - start + 1);
+      });
+      const total = spans.reduce((acc, value) => acc + value, 0);
+
+      const segments = calls.map((item, position) => {
+        const meta = item.meta || {};
+        const chosen = position === props.selected;
+        return h('button', {
+          key: 'seg-' + position,
+          type: 'button',
+          style: Object.assign({}, STYLE.timelineSeg, {
+            flex: String(spans[position]) + ' 1 0',
+            background: chosen ? pal.famPrompt : pal.punct,
+            opacity: chosen ? 1 : 0.55,
+          }),
+          title:
+            '#' +
+            (item.index || position + 1) +
+            ' · step ' +
+            (meta.step === undefined ? position + 1 : meta.step) +
+            ' · ' +
+            spans[position] +
+            ' ' +
+            TEXT.timelineRecords +
+            ' · ' +
+            (meta.messages === undefined ? '?' : meta.messages) +
+            ' ' +
+            TEXT.messages +
+            (chosen ? ' · ' + TEXT.timelineSelected : ''),
+          onClick: onSelect ? () => onSelect(position) : undefined,
+        });
+      });
+
+      return h(
+        'div',
+        { key: 'timeline', style: STYLE.timeline },
+        h(
+          'div',
+          { key: 'head', style: STYLE.timelineHead },
+          h('span', { key: 't', style: STYLE.chipValue }, TEXT.timelineTitle),
+          h('span', { key: 'n', style: STYLE.sourceMuted }, calls.length + ' ' + TEXT.callsShort),
+        ),
+        h('div', { key: 'track', style: STYLE.timelineTrack, title: TEXT.timelineHint }, segments),
+        h(
+          'div',
+          { key: 'labels', style: STYLE.timelineLabels },
+          h('span', { key: 'a' }, '#1'),
+          h('span', { key: 'b' }, total + ' ' + TEXT.timelineRecords),
+          h('span', { key: 'c' }, '#' + calls.length),
+        ),
+      );
+    }
+
+    /**
      * The header's diff slot: the first call of a Turn has nothing to compare
      * against, and saying so is better than showing an empty panel.
      */
@@ -2165,6 +2304,15 @@ window.__ModuleLoader__.load({
         h('div', { key: 'row-meta', style: STYLE.chips }, metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
         call ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
+        callCount > 1
+          ? h(Timeline, {
+              key: 'row-timeline',
+              calls: calls,
+              selected: index,
+              onSelect: setSelected,
+              pal: pal,
+            })
+          : null,
         call
           ? h(SourcePanel, {
               key: 'row-sources',
