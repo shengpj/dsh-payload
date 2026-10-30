@@ -46,6 +46,13 @@ const ReactStub = {
   memo(component) {
     return component;
   },
+  /* React.Component only backs the dialog's error boundary. */
+  Component: class Component {
+    constructor(props) {
+      this.props = props || {};
+      this.state = {};
+    }
+  },
 };
 
 /* ------------------------------------------------------------ plugin loader */
@@ -83,6 +90,13 @@ function render(node, sink) {
     return;
   }
   if (typeof node.type === 'function') {
+    /* Class components (the error boundary) must be instantiated, not called. */
+    if (node.type.prototype && typeof node.type.prototype.render === 'function') {
+      const instance = new node.type(node.props);
+      instance.props = node.props;
+      render(instance.render(), sink);
+      return;
+    }
     render(node.type(node.props), sink);
     return;
   }
@@ -410,11 +424,27 @@ expect(/2\s*(往返|round-trips)/.test(tip), 'tooltip missing round-trips: ' + t
 expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
 
+/* l) the error boundary: a payload that makes the body throw must still render
+      an explanatory dialog instead of blanking the overlay. */
+expect(typeof internals.boundary === 'function', 'error boundary not exposed');
+const Boundary = internals.boundary();
+expect(typeof Boundary === 'function', 'error boundary is not a component');
+const healthy = walk(ReactStub.createElement(Boundary, null, 'body text'));
+expect(healthy.text.join(' ').includes('body text'), 'boundary swallowed healthy children');
+const caught = new Boundary({ children: 'body text' });
+const derived = Boundary.getDerivedStateFromError(new Error('boom from the JSON pane'));
+expect(typeof derived.failure === 'string' && derived.failure.includes('boom'), 'boundary did not capture the message');
+caught.state = derived;
+const failedTree = walk(caught.render());
+const failedText = failedTree.text.join(' ');
+expect(failedText.includes('boom from the JSON pane'), 'boundary did not print the failure: ' + failedText.slice(0, 120));
+expect(/读取失败|Read failed/.test(failedText), 'boundary does not use the error wording');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 11 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 12 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

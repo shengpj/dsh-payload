@@ -78,10 +78,28 @@ function loadEvents(file) {
 function loadPlugin() {
   let mod = null;
   globalThis.__DSH_PAYLOAD_TEST__ = true;
+  /* This harness only drives the pure pipeline; the dialog classes need nothing
+     but a `Component` base to load, so hand React a minimal stand-in. */
+  const reactStub = {
+    Component: class Component {
+      constructor(props) {
+        this.props = props || {};
+        this.state = {};
+      }
+    },
+    createElement: () => null,
+    useState: (value) => [value, () => {}],
+    useReducer: (reducer, value) => [value, () => {}],
+    useRef: (value) => ({ current: value }),
+    useEffect() {},
+    useMemo: (factory) => factory(),
+    useCallback: (fn) => fn,
+    memo: (component) => component,
+  };
   globalThis.window = {
     __ModuleLoader__: {
       load: ({ id, factory }) => {
-        mod = factory(() => ({}));
+        mod = factory(() => reactStub);
       },
     },
   };

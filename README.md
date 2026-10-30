@@ -116,7 +116,7 @@ index.js                     Host 半边（空 apply，只为让 bundle 有个 h
 client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
 cordis.patch.yml             装进 profile 时插入的条目
 tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射与本轮/历史切分
-tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 10 个场景
+tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 12 个场景（含错误边界）
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -129,13 +129,15 @@ market/index.json                  插件市场索引（format 1）
 ```bash
 node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
 node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
-node tools/render-smoke.cjs                       # 渲染：11 个场景
+node tools/render-smoke.cjs                       # 渲染：12 个场景
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 
 `verify-against-session.cjs` 除了对账每个 Turn 的调用次数与 token 总量，还会检查四组不变量：本轮/历史切分（`historyEnd` 落在 `0..messages` 之间、随 step 前进只增不减、且不少于上一轮最后一次调用已携带的消息数）、来源分类（每条消息恰好归类一次，且各类之和等于 `messages.length`）、相邻调用 diff（首调用没有 diff；其余调用满足 `prefix + added = messages`，`removed > 0` 时必须同时标记为改写），以及 step 记录区间（每个调用都满足 `startSeq ≤ endSeq`，且各 step 的区间互不重叠——时间线就是靠这个区间算出每步的 token）。逐 Turn 重建再释放，避免把整份会话的所有 prompt 同时留在内存里。
 
 数据管线的核心是五步：定位消息所属 Turn → 翻完窗口 → 逐个 `step/start` 切分 → 每个切点折叠出 `messages` 并继承最近一条 `request/header` → 按 `meta.step` 选中目标调用。踩过的坑（slot 组件里不能用注入式 hook、`request/header` 稀疏、空 `content: []` 是增量标记、`listTokens` 不是全量 token 表等）都记在 [docs/notes.md](docs/notes.md)。
+
+弹框外面套了一圈错误边界：万一某次渲染抛错，弹出的是「读取失败：<原始信息>」而不是整页白屏，控制台还会留一行 `[dsh-payload] render failed`。这样下次再出问题，报错里就有能直接定位的那句话。
 
 ## License
 

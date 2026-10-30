@@ -1424,6 +1424,11 @@ window.__ModuleLoader__.load({
         locateMessage: locateMessage,
         callIndexForStep: callIndexForStep,
         DialogBody: DialogBody,
+        /* The boundary is declared after this hook (it needs the classes above),
+           so hand out a thunk instead of touching the class early. */
+        boundary: function boundary() {
+          return DialogBoundary;
+        },
         Timeline: Timeline,
         publishDialog: publishDialog,
       };
@@ -2728,7 +2733,65 @@ window.__ModuleLoader__.load({
         );
       }
 
-      return h('div', { style: STYLE.backdrop, onClick: () => publishDialog(null) }, inner);
+      return h(
+        DialogBoundary,
+        null,
+        h('div', { style: STYLE.backdrop, onClick: () => publishDialog(null) }, inner),
+      );
+    }
+
+    /**
+     * Last line of defence. A thrown error inside the dialog used to take the
+     * whole overlay down with no explanation, which reads as "the plugin
+     * crashed". Catching it here keeps the frame alive and shows the message,
+     * so the next report can name the actual failure.
+     */
+    class DialogBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { failure: null };
+      }
+
+      static getDerivedStateFromError(error) {
+        return { failure: String((error && error.message) || error) };
+      }
+
+      componentDidCatch(error, info) {
+        /* Console is the only channel the Client has; keep it one line. */
+        try {
+          if (typeof console !== 'undefined' && console.error) {
+            console.error('[dsh-payload] render failed', error, info && info.componentStack);
+          }
+        } catch (err) {
+          /* nothing to do */
+        }
+      }
+
+      render() {
+        if (this.state.failure === null) return this.props.children;
+        return h(
+          'div',
+          {
+            style: Object.assign({}, STYLE.dialog, { maxHeight: '40vh' }),
+            onClick: (event) => event.stopPropagation(),
+          },
+          h(
+            'div',
+            { style: STYLE.dialogHeader },
+            h('span', { style: STYLE.dialogTitle }, TEXT.error),
+            h(
+              'button',
+              { type: 'button', className: 'dsh-pl-btn', onClick: () => publishDialog(null), style: STYLE.smallButton },
+              '✕',
+            ),
+          ),
+          h(
+            'div',
+            { style: STYLE.dialogBody },
+            h('div', { style: STYLE.note }, this.state.failure),
+          ),
+        );
+      }
     }
 
     // ------------------------------------------------------------ the plugin
