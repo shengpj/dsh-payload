@@ -400,7 +400,12 @@ expect(
 const timed = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)]) }));
 const timedText = timed.text.join(' ');
 expect(/本轮各步|This Turn’s steps/.test(timedText), 'timeline missing for 3 calls');
-expect(/最重|heaviest/.test(timedText), 'heaviest-step pills missing');
+/* The bar must stay free of the per-call bookkeeping that the tab strip / step
+   list already print: "heaviest" pills were removed because they duplicated
+   `#k · step n · tokens`. */
+expect(!/最重|heaviest/.test(timedText), 'duplicate heaviest-step pills are back');
+/* The Turn's own token total now sits at the right of the bar head. */
+expect(timedText.includes('600'), 'timeline lost the turn token total');
 
 /* Drive the component directly: its track is a plain flex row of buttons, which
    the tree walker cannot single out by structure alone. */
@@ -432,47 +437,16 @@ expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
 expect(!/read|grep/.test(tip), 'tooltip still names tools: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
 
-/* The "最重" pills are #n + tokens only, and their tooltip likewise skips the
-   counts while still naming the tools. */
+/* Nothing in the timeline names a tool or repeats tool traffic — the bar is
+   about tokens per step, and every other count would duplicate the tab strip. */
 const uniformCalls = [
   { index: 1, meta: { index: 1, step: 5, usage: usageOf(1000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
   { index: 2, meta: { index: 2, step: 6, usage: usageOf(3000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
   { index: 3, meta: { index: 3, step: 7, usage: usageOf(2000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
 ];
-const heavyOf = (calls) => {
-  const tree = Timeline({ calls, selected: 0 });
-  const labels = [];
-  const visit = (node) => {
-    if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) { node.forEach(visit); return; }
-    const props = node.props || {};
-    if (typeof props.className === 'string' && props.className.includes('dsh-pl-heavy') && Array.isArray(props.children)) {
-      const text = props.children.filter((c) => c && typeof c === 'object').map((c) => String((c.props && c.props.children) || ''));
-      labels.push({ text: text.join(' '), tip: String(props.title || '') });
-    }
-    visit(props.children);
-  };
-  visit(tree);
-  return labels;
-};
-const uniformPills = heavyOf(uniformCalls);
-expect(uniformPills.length > 0, 'no heaviest pills rendered');
-expect(
-  uniformPills.every((pill) => /^step \d+ · /.test(pill.tip)),
-  'pill tooltip shape changed: ' + JSON.stringify(uniformPills[0]),
-);
-expect(
-  uniformPills.every((pill) => !/工具|tools|往返|round-trips/.test(pill.text)),
-  'pill still prints tool traffic: ' + JSON.stringify(uniformPills.map((p) => p.text)),
-);
-expect(
-  uniformPills.every((pill) => !/工具|tools|往返|round-trips/.test(pill.tip)),
-  'pill tooltip still prints tool traffic: ' + JSON.stringify(uniformPills[0]),
-);
-expect(
-  uniformPills.every((pill) => !/read/.test(pill.tip)),
-  'pill tooltip still names tools: ' + JSON.stringify(uniformPills[0]),
-);
+const uniformFlat = walk(Timeline({ calls: uniformCalls, selected: 0 }));
+const uniformText = uniformFlat.text.join(' ') + ' ' + uniformFlat.tips.join(' ');
+expect(!/工具|tools|往返|round-trips|read|grep/.test(uniformText), 'timeline still prints tool traffic: ' + uniformText.slice(0, 200));
 const varied = walk(Timeline({ calls: threeCalls, selected: 0 }));
 const variedTip = varied.text.join(' ') + ' ' + varied.tips.join(' ');
 expect(!/工具|tools|往返|round-trips/.test(variedTip), 'tool traffic still printed: ' + variedTip.slice(0, 200));

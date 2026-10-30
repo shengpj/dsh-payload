@@ -109,7 +109,6 @@ window.__ModuleLoader__.load({
           timelineTitle: '本轮各步',
           timelineHint: '每段是一步，宽度按该步消耗的 token；点一段切到那次调用',
           timelineSelected: '当前',
-          timelineHeaviest: '最重',
           stepWord: 'step',
           tokens: 'token',
           noUsage: '无用量',
@@ -194,7 +193,6 @@ window.__ModuleLoader__.load({
           timelineTitle: 'This Turn’s steps',
           timelineHint: 'One segment per step, width by the tokens it spent; click to switch',
           timelineSelected: 'selected',
-          timelineHeaviest: 'heaviest',
           stepWord: 'step',
           tokens: 'tokens',
           noUsage: 'no usage',
@@ -418,40 +416,6 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
         border: 'none',
         padding: '0',
-      },
-      timelineLabels: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        gap: '6px',
-        flexWrap: 'wrap',
-        fontSize: '11.5px',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-        fontVariantNumeric: 'tabular-nums',
-      },
-      timelineHeavyLabel: {
-        fontWeight: '600',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-      },
-      /* The heaviest steps, as compact pills: "#7 99.3k 12 工具". */
-      timelineHeavy: {
-        display: 'inline-flex',
-        alignItems: 'baseline',
-        gap: '5px',
-        padding: '2px 7px',
-        borderRadius: '999px',
-        border: '1px solid var(--dsw-alias-border-l1, #e3e6ea)',
-        background: 'transparent',
-        color: 'inherit',
-        cursor: 'pointer',
-        fontVariantNumeric: 'tabular-nums',
-      },
-      timelineHeavyNo: {
-        fontWeight: '600',
-        color: 'var(--dsw-alias-label-primary, #101828)',
-      },
-      timelineHeavyNum: {
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
 
       /* ---- source breakdown: one stacked bar, then the legend ---- */
@@ -2036,33 +2000,11 @@ window.__ModuleLoader__.load({
         });
       });
 
-      /* Below the bar, the steps that did the most work — reading a 20-step strip
-         segment by segment is not how anyone finds the expensive step. */
-      const ranked = calls
-        .map((item, position) => ({ item: item, position: position, usage: (item.meta && item.meta.usage) || null }))
-        .filter((entry) => entry.usage && entry.usage.total > 0)
-        .sort((a, b) => b.usage.total - a.usage.total)
-        .slice(0, 3);
-
-      const heaviest = ranked.map((entry) => {
-        const meta = entry.item.meta || {};
-        const parts = ['step ' + (meta.step !== undefined ? meta.step : '?')];
-        parts.push(formatTokens(entry.usage.total) + ' ' + TEXT.tokens);
-        return h(
-          'button',
-          {
-            key: 'heavy-' + entry.position,
-            type: 'button',
-            className: 'dsh-pl-heavy' + (entry.position === props.selected ? ' dsh-pl-step-on' : ''),
-            style: STYLE.timelineHeavy,
-            title: parts.join(' · '),
-            onClick: onSelect ? () => onSelect(entry.position) : undefined,
-          },
-          h('span', { key: 'n', style: STYLE.timelineHeavyNo }, '#' + (entry.item.index || entry.position + 1)),
-          h('span', { key: 't', style: STYLE.timelineHeavyNum }, formatTokens(entry.usage.total)),
-        );
-      });
-
+      /* The bar answers one question the tabs cannot: how the Turn's tokens are
+         spread across its steps. The heaviest-step pills that used to sit under
+         it said `#k · step n · tokens` — exactly what the tab strip and the step
+         list already print — so they are gone; the bar itself is the navigation
+         (a segment is one step, and one step is one call). */
       return h(
         'div',
         { key: 'timeline', style: STYLE.timeline },
@@ -2071,17 +2013,13 @@ window.__ModuleLoader__.load({
           { key: 'head', style: STYLE.timelineHead },
           h('span', { key: 't', style: STYLE.chipValue }, TEXT.timelineTitle),
           h('span', { key: 'n', style: STYLE.sourceMuted }, calls.length + ' ' + TEXT.callsShort),
+          h(
+            'span',
+            { key: 'r', style: Object.assign({}, STYLE.sourceMuted, { marginLeft: 'auto' }) },
+            formatTokens(totalTokens),
+          ),
         ),
         h('div', { key: 'track', style: STYLE.timelineTrack, title: TEXT.timelineHint }, segments),
-        heaviest.length
-          ? h(
-              'div',
-              { key: 'heavy', style: STYLE.timelineLabels },
-              h('span', { key: 'l', style: STYLE.timelineHeavyLabel }, TEXT.timelineHeaviest),
-              heaviest,
-              h('span', { key: 'r', style: Object.assign({}, STYLE.sourceMuted, { marginLeft: 'auto' }) }, formatTokens(totalTokens)),
-            )
-          : null,
       );
     }
 
