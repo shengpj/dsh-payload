@@ -111,9 +111,6 @@ window.__ModuleLoader__.load({
           timelineSelected: '当前',
           timelineHeaviest: '最重',
           stepWord: 'step',
-          toolCount: '工具',
-          toolNone: '无工具',
-          roundTrips: '往返',
           tokens: 'token',
           noUsage: '无用量',
         }
@@ -199,9 +196,6 @@ window.__ModuleLoader__.load({
           timelineSelected: 'selected',
           timelineHeaviest: 'heaviest',
           stepWord: 'step',
-          toolCount: 'tools',
-          toolNone: 'no tools',
-          roundTrips: 'round-trips',
           tokens: 'tokens',
           noUsage: 'no usage',
         };
@@ -2014,17 +2008,16 @@ window.__ModuleLoader__.load({
       /* On a pill there is room for two facts and no more. Which step it is wins
          (what the reader is scanning for); the tool traffic moves into the hover
          tooltip, which already carries it, so nothing is lost. */
+      /* "1 工具 · 1 往返" on every segment is the same two numbers N times over —
+         a Turn is normally one tool call per step, so it never distinguishes
+         anything. The tooltip answers "where did the tokens go", which is the
+         step number, the tokens, and which tools ran. */
       const segments = calls.map((item, position) => {
         const meta = item.meta || {};
         const chosen = position === props.selected;
-        const toolCalls = typeof meta.toolCalls === 'number' ? meta.toolCalls : 0;
-        const toolResults = typeof meta.toolResults === 'number' ? meta.toolResults : 0;
-        const roundTrips = Math.min(toolCalls, toolResults);
         const usage = meta.usage || null;
         const parts = ['#' + (item.index || position + 1)];
         if (meta.step !== undefined) parts.push(TEXT.stepWord + ' ' + meta.step);
-        parts.push(toolCalls ? toolCalls + ' ' + TEXT.toolCount : TEXT.toolNone);
-        if (roundTrips) parts.push(roundTrips + ' ' + TEXT.roundTrips);
         parts.push(usage && usage.total ? formatTokens(usage.total) + ' ' + TEXT.tokens : TEXT.noUsage);
         if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
         if (chosen) parts.push(TEXT.timelineSelected);
@@ -2052,12 +2045,7 @@ window.__ModuleLoader__.load({
 
       const heaviest = ranked.map((entry) => {
         const meta = entry.item.meta || {};
-        const toolCalls = typeof meta.toolCalls === 'number' ? meta.toolCalls : 0;
-        const toolResults = typeof meta.toolResults === 'number' ? meta.toolResults : 0;
-        const roundTrips = Math.min(toolCalls, toolResults);
         const parts = ['step ' + (meta.step !== undefined ? meta.step : '?')];
-        parts.push(toolCalls ? toolCalls + ' ' + TEXT.toolCount : TEXT.toolNone);
-        if (roundTrips) parts.push(roundTrips + ' ' + TEXT.roundTrips);
         parts.push(formatTokens(entry.usage.total) + ' ' + TEXT.tokens);
         if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
         return h(

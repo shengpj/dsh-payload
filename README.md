@@ -96,7 +96,9 @@ git clone https://github.com/shengpj/dsh-payload.git
 | --- | --- |
 | 「输入」chip | **未命中前缀缓存**的 prompt tokens，只是 prompt 的一部分，**不是 JSON 大小** |
 | 「缓存」chip | 命中 prompt cache 的部分；输入 + 缓存才是完整 prompt |
-| 「N 条消息」「请求体 X MB」 | 这次请求携带的历史条数与重建 JSON 的字节数；字节 ≠ token（中文约 1 token ≈ 1–2 字节） |
+| 「N 条消息」「请求体 X MB」 | 这次请求携带的**消息条数**（不是 token，也不是字数）与重建 JSON 的字节数；字节 ≠ token（中文约 1 token ≈ 1–2 字节） |
+
+为什么相邻两次调用经常只差 2 条：一步的产物正好是「一条 assistant 消息（它的 tool_calls）+ 一条对应的 tool 结果」，所以下一步的请求比上一步多 2 条；某一步没调用工具（直接结束）就不增长，连续调多次工具则一次增长多条。
 
 实测差异：某次调用 `input 1009 / cache 80,640 / output 1,425 / total 83,074`，而日志重建出 1078 条消息、3.70 MB、约 754 k tokens——provider 只按 81,649 prompt tokens 计费，差 9.2 倍。原因是请求发出前会先经**上下文压缩**把旧区间折叠成摘要，日志保留原文、模型只读摘要，所以条数与字节远大于计费 tokens。因此 token 一律以 `assistant/message.data.usage` 为准，条数/字节只作「这份快照有多大」的参考；每个 chip 都挂了 `title` 说明，日志条数超过 200 时弹框底部另补一行同样口径的提示。
 

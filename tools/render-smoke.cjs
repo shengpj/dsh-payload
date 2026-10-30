@@ -420,21 +420,22 @@ const ratios = segs.map((seg) => String(seg.props.style.flex).split(' ')[0]);
 expect(ratios.join(',') === '1000,3000,2000', 'segments not token-proportional: ' + ratios.join(','));
 expect(String(segs[2].props.style.opacity) === '1', 'selected segment is not highlighted');
 expect(String(segs[0].props.style.opacity) !== '1', 'unselected segments look selected');
-/* The tooltip must describe the work, not the log extent. */
+/* The tooltip answers "where did the tokens go": step number, tokens, tool names.
+   It must NOT carry the tool/round-trip counts — a normal Turn is one tool call
+   per step, so "1 工具 · 1 往返" repeated on every segment said nothing. */
 const tip = String(segs[1].props.title);
-expect(/3\s*(工具|tools)/.test(tip), 'tooltip missing tool count: ' + tip);
-expect(/2\s*(往返|round-trips)/.test(tip), 'tooltip missing round-trips: ' + tip);
+expect(!/工具|tools|往返|round-trips/.test(tip), 'segment tooltip still prints tool traffic: ' + tip);
 expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
+expect(/read/.test(tip), 'tooltip missing tool names: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
 
-/* Tool traffic appears only when it varies between steps; a Turn where every
-   step calls one tool once must not repeat "1 工具 · 1 往返" on every pill. */
+/* The "最重" pills are #n + tokens only, and their tooltip likewise skips the
+   counts while still naming the tools. */
 const uniformCalls = [
   { index: 1, meta: { index: 1, step: 5, usage: usageOf(1000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
   { index: 2, meta: { index: 2, step: 6, usage: usageOf(3000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
   { index: 3, meta: { index: 3, step: 7, usage: usageOf(2000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
 ];
-/* Pills are #n + tokens only; tool traffic lives in the hover tooltip. */
 const heavyOf = (calls) => {
   const tree = Timeline({ calls, selected: 0 });
   const labels = [];
@@ -454,16 +455,20 @@ const heavyOf = (calls) => {
 const uniformPills = heavyOf(uniformCalls);
 expect(uniformPills.length > 0, 'no heaviest pills rendered');
 expect(
-  uniformPills.every((pill) => !/工具|tools/.test(pill.text)),
-  'pill still prints the tool count: ' + JSON.stringify(uniformPills.map((p) => p.text)),
+  uniformPills.every((pill) => !/工具|tools|往返|round-trips/.test(pill.text)),
+  'pill still prints tool traffic: ' + JSON.stringify(uniformPills.map((p) => p.text)),
 );
 expect(
-  uniformPills.some((pill) => /工具|tools/.test(pill.tip)),
-  'tool count vanished from the tooltip too: ' + JSON.stringify(uniformPills[0]),
+  uniformPills.every((pill) => !/工具|tools|往返|round-trips/.test(pill.tip)),
+  'pill tooltip still prints tool traffic: ' + JSON.stringify(uniformPills[0]),
+);
+expect(
+  uniformPills.every((pill) => /read/.test(pill.tip)),
+  'pill tooltip lost the tool names: ' + JSON.stringify(uniformPills[0]),
 );
 const varied = walk(Timeline({ calls: threeCalls, selected: 0 }));
 const variedTip = varied.text.join(' ') + ' ' + varied.tips.join(' ');
-expect(/工具|tools|往返|round-trips/.test(variedTip), 'varying tool counts no longer printed');
+expect(!/工具|tools|往返|round-trips/.test(variedTip), 'tool traffic still printed: ' + variedTip.slice(0, 200));
 
 /* l) the error boundary: a payload that makes the body throw must still render
       an explanatory dialog instead of blanking the overlay. */
