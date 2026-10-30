@@ -2010,8 +2010,10 @@ window.__ModuleLoader__.load({
          tooltip, which already carries it, so nothing is lost. */
       /* "1 工具 · 1 往返" on every segment is the same two numbers N times over —
          a Turn is normally one tool call per step, so it never distinguishes
-         anything. The tooltip answers "where did the tokens go", which is the
-         step number, the tokens, and which tools ran. */
+         anything. The tooltip answers "where did the tokens go": which step, how
+         many tokens. No tool names either — they describe what the step PRODUCED,
+         while the number here addresses the request snapshot, and reading the two
+         together looks like a mismatch. */
       const segments = calls.map((item, position) => {
         const meta = item.meta || {};
         const chosen = position === props.selected;
@@ -2019,7 +2021,6 @@ window.__ModuleLoader__.load({
         const parts = ['#' + (item.index || position + 1)];
         if (meta.step !== undefined) parts.push(TEXT.stepWord + ' ' + meta.step);
         parts.push(usage && usage.total ? formatTokens(usage.total) + ' ' + TEXT.tokens : TEXT.noUsage);
-        if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
         if (chosen) parts.push(TEXT.timelineSelected);
 
         return h('button', {
@@ -2047,7 +2048,6 @@ window.__ModuleLoader__.load({
         const meta = entry.item.meta || {};
         const parts = ['step ' + (meta.step !== undefined ? meta.step : '?')];
         parts.push(formatTokens(entry.usage.total) + ' ' + TEXT.tokens);
-        if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
         return h(
           'button',
           {

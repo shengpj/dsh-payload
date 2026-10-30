@@ -426,7 +426,10 @@ expect(String(segs[0].props.style.opacity) !== '1', 'unselected segments look se
 const tip = String(segs[1].props.title);
 expect(!/工具|tools|往返|round-trips/.test(tip), 'segment tooltip still prints tool traffic: ' + tip);
 expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
-expect(/read/.test(tip), 'tooltip missing tool names: ' + tip);
+/* Tool names describe what the step PRODUCED; the tip addresses the request
+   snapshot, so naming a tool there reads as "this request contains that call".
+   The tip therefore stays to step + tokens. */
+expect(!/read|grep/.test(tip), 'tooltip still names tools: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
 
 /* The "最重" pills are #n + tokens only, and their tooltip likewise skips the
@@ -455,6 +458,10 @@ const heavyOf = (calls) => {
 const uniformPills = heavyOf(uniformCalls);
 expect(uniformPills.length > 0, 'no heaviest pills rendered');
 expect(
+  uniformPills.every((pill) => /^step \d+ · /.test(pill.tip)),
+  'pill tooltip shape changed: ' + JSON.stringify(uniformPills[0]),
+);
+expect(
   uniformPills.every((pill) => !/工具|tools|往返|round-trips/.test(pill.text)),
   'pill still prints tool traffic: ' + JSON.stringify(uniformPills.map((p) => p.text)),
 );
@@ -463,8 +470,8 @@ expect(
   'pill tooltip still prints tool traffic: ' + JSON.stringify(uniformPills[0]),
 );
 expect(
-  uniformPills.every((pill) => /read/.test(pill.tip)),
-  'pill tooltip lost the tool names: ' + JSON.stringify(uniformPills[0]),
+  uniformPills.every((pill) => !/read/.test(pill.tip)),
+  'pill tooltip still names tools: ' + JSON.stringify(uniformPills[0]),
 );
 const varied = walk(Timeline({ calls: threeCalls, selected: 0 }));
 const variedTip = varied.text.join(' ') + ' ' + varied.tips.join(' ');
