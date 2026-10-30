@@ -892,6 +892,86 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * Running version of `summarizeSources` for a sequence that only ever grows.
+     *
+     * Within one Turn every request carries the previous request's messages as a
+     * prefix, so the source histogram of call k is call k−1's histogram plus the
+     * handful of new messages. Recomputing it from the whole track per call made
+     * this the single biggest cost after the O(n²) fold was fixed.
+     */
+    function newSourceAcc() {
+      return {
+        n: 0,
+        counts: { prompt: 0, injected: 0, model: 0, tool: 0, other: 0 },
+        kinds: {},
+        order: [],
+        snapshot: null,
+        snapshotN: -1,
+      };
+    }
+
+    function foldSourceInto(acc, entry) {
+      const kind = (entry && entry.kind) || '';
+      const known = SOURCE_KINDS[kind];
+      const family = known ? known.family : 'other';
+      acc.counts[family] += 1;
+      const key = known ? known.key : 'other';
+      if (!acc.kinds[key]) {
+        acc.kinds[key] = { key: key, kind: kind, family: family, count: 0 };
+        acc.order.push(key);
+      }
+      acc.kinds[key].count += 1;
+    }
+
+    function snapshotSourceAcc(acc) {
+      if (acc.snapshotN === acc.n) return acc.snapshot;
+      acc.snapshot = {
+        counts: {
+          prompt: acc.counts.prompt,
+          injected: acc.counts.injected,
+          model: acc.counts.model,
+          tool: acc.counts.tool,
+          other: acc.counts.other,
+        },
+        kinds: acc.order.map(function (key) {
+          return {
+            key: acc.kinds[key].key,
+            kind: acc.kinds[key].kind,
+            family: acc.kinds[key].family,
+            count: acc.kinds[key].count,
+          };
+        }),
+      };
+      acc.snapshotN = acc.n;
+      return acc.snapshot;
+    }
+
+    /** Summary of every message folded so far (the whole carried history). */
+    function accSources(acc, track) {
+      for (; acc.n < track.length; acc.n += 1) foldSourceInto(acc, firstRecord(track[acc.n]));
+      return snapshotSourceAcc(acc);
+    }
+
+    /** Summary of only the messages this Turn wrote, from `historyEnd` onward. */
+    function accFreshSources(acc, track, historyEnd, turnStartSeq) {
+      if (acc.fromIndex !== historyEnd) {
+        /* historyEnd is fixed once the Turn boundary is crossed, so this branch
+           runs at most twice per Turn: reset when it first becomes known. */
+        acc.fromIndex = historyEnd;
+        acc.n = 0;
+        acc.counts = { prompt: 0, injected: 0, model: 0, tool: 0, other: 0 };
+        acc.kinds = {};
+        acc.order = [];
+        acc.snapshot = null;
+        acc.snapshotN = -1;
+      }
+      for (; acc.n + historyEnd < track.length; acc.n += 1) {
+        foldSourceInto(acc, firstRecord(track[acc.n + historyEnd], turnStartSeq));
+      }
+      return snapshotSourceAcc(acc);
+    }
+
     /** Flatten a window entry list into a seq-ordered array of real (non-transient) events. */
     function collectEvents(entries) {
       const out = [];
@@ -979,131 +1059,177 @@ window.__ModuleLoader__.load({
      * records ({seq, kind, family, byte}), so the viewer can say where every
      * message came from without rebuilding anything.
      */
-    function buildMessages(events, cutSeq, turnStartSeq) {
-      const items = [];
-      const boundary = typeof turnStartSeq === 'number' && turnStartSeq >= 0 ? turnStartSeq : -1;
-      let lastAssistant = null;
+    /**
+     * The fold state for one request. `buildMessages` exists as a thin wrapper so
+     * the harness can still ask for a single snapshot, but the viewer's hot path
+     * (`buildTurnCalls`) drives this class directly: it appends each record ONCE
+     * and slides the cut forward, instead of re-scanning the whole window per
+     * step (was 169 full folds = 11 s on a 13 k-record session).
+     */
+    function FoldState(turnStartSeq) {
+      this.items = [];
+      this.lastAssistant = null;
+      this.boundary = typeof turnStartSeq === 'number' && turnStartSeq >= 0 ? turnStartSeq : -1;
+      /* Every kept message, and the three parallel arrays, are append-only from
+         the perspective of a cut that only moves forward — which is exactly how
+         one Turn calls the model. A snapshot is therefore a prefix. */
+      this.snapshot = { messages: [], historyEnd: 0, track: [], links: [], historyEndFixed: false };
+    }
 
-      for (let i = 0; i < events.length; i += 1) {
-        const event = events[i];
-        const seq = seqOf(event);
-        if (seq >= cutSeq) break;
-        const type = typeOf(event);
-        const data = dataOf(event);
+    /** Absorb one log record if it contributes to the request payload. */
+    FoldState.prototype.consume = function consume(event) {
+      const seq = seqOf(event);
+      const type = typeOf(event);
+      const data = dataOf(event);
+      const items = this.items;
 
-        if (type === 'tool/call') {
-          if (lastAssistant && Array.isArray(lastAssistant.tool_calls)) {
-            lastAssistant.tool_calls.push({
-              id: data.callId !== undefined ? data.callId : data.toolCallId,
-              type: 'function',
-              function: {
-                name: data.name,
-                arguments:
-                  typeof data.arguments === 'string'
-                    ? data.arguments
-                    : JSON.stringify(data.arguments === undefined ? {} : data.arguments),
-              },
+      if (type === 'tool/call') {
+        const lastAssistant = this.lastAssistant;
+        if (lastAssistant && Array.isArray(lastAssistant.tool_calls)) {
+          lastAssistant.tool_calls.push({
+            id: data.callId !== undefined ? data.callId : data.toolCallId,
+            type: 'function',
+            function: {
+              name: data.name,
+              arguments:
+                typeof data.arguments === 'string'
+                  ? data.arguments
+                  : JSON.stringify(data.arguments === undefined ? {} : data.arguments),
+            },
+          });
+          /* The call belongs to the assistant message it hangs off, so it adds
+             to that message's size rather than becoming one of its own. */
+          const owner = items[items.length - 1];
+          if (owner) {
+            owner.track.push({
+              seq: seq,
+              kind: 'model',
+              family: 'model',
+              byte: byteLength(data.arguments),
             });
-            /* The call belongs to the assistant message it hangs off, so it adds
-               to that message's size rather than becoming one of its own. */
-            const owner = items[items.length - 1];
-            const kind = 'model';
-            if (owner) {
-              owner.track.push({
-                seq: seq,
-                kind: kind,
-                family: 'model',
-                byte: byteLength(data.arguments),
-              });
-            }
           }
-          continue;
         }
-
-        const role = SURFACE_ROLES[type];
-        if (!role) continue;
-
-        if (applyReplace(items, data.surfaceOp)) lastAssistant = null;
-
-        const raw =
-          role === 'user' && typeof data.role === 'string'
-            ? data
-            : data.message && typeof data.message === 'object'
-              ? data.message
-              : data;
-
-        const message = { role: role, content: flattenContent(raw.content) };
-        /* Non-enumerable so it never reaches JSON.stringify or the copied
-           payload, but the viewer/harness can still tell which turn+step
-           produced this message — that is what its bubble is keyed by. */
-        Object.defineProperty(message, '__origin', {
-          value: {
-            turn: typeof (data && data.turn) === 'number' ? data.turn : null,
-            step: typeof (data && data.step) === 'number' ? data.step : null,
-          },
-          enumerable: false,
-          writable: true,
-          configurable: true,
-        });
-
-        if (role === 'tool') {
-          const callId = raw.toolCallId !== undefined ? raw.toolCallId : raw.tool_call_id;
-          if (callId !== undefined) message.tool_call_id = callId;
-          if (raw.isError === true) message.is_error = true;
-          if (typeof raw.name === 'string') message.name = raw.name;
-        }
-
-        if (role === 'assistant') {
-          message.tool_calls = [];
-          lastAssistant = message;
-        } else {
-          lastAssistant = null;
-        }
-
-        const kind = sourceKindOf(type, data);
-        const bytes = byteLength(message.content);
-        items.push({
-          seq: seq,
-          kind: kind,
-          byte: bytes,
-          message: message,
-          /* Where this message is rendered in the conversation, so the viewer
-             can jump from a JSON row to its bubble. Computed once here, from
-             the same record the message was built from. */
-          link: messageLinkOf(type, data, role, raw),
-          track: [{ seq: seq, kind: kind, family: familyOf(kind), byte: bytes }],
-        });
+        return;
       }
 
-      const messages = [];
-      const track = [];
-      const links = [];
-      let historyEnd = boundary < 0 ? 0 : null;
-      for (let i = 0; i < items.length; i += 1) {
-        const message = items[i].message;
-        if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length === 0) {
-          delete message.tool_calls;
+      const role = SURFACE_ROLES[type];
+      if (!role) return;
+
+      if (applyReplace(items, data.surfaceOp)) this.lastAssistant = null;
+
+      const raw =
+        role === 'user' && typeof data.role === 'string'
+          ? data
+          : data.message && typeof data.message === 'object'
+            ? data.message
+            : data;
+
+      const message = { role: role, content: flattenContent(raw.content) };
+      /* Non-enumerable so it never reaches JSON.stringify or the copied
+         payload, but the viewer/harness can still tell which turn+step
+         produced this message — that is what its bubble is keyed by. */
+      Object.defineProperty(message, '__origin', {
+        value: {
+          turn: typeof (data && data.turn) === 'number' ? data.turn : null,
+          step: typeof (data && data.step) === 'number' ? data.step : null,
+        },
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      });
+
+      if (role === 'tool') {
+        const callId = raw.toolCallId !== undefined ? raw.toolCallId : raw.tool_call_id;
+        if (callId !== undefined) message.tool_call_id = callId;
+        if (raw.isError === true) message.is_error = true;
+        if (typeof raw.name === 'string') message.name = raw.name;
+      }
+
+      if (role === 'assistant') {
+        message.tool_calls = [];
+        this.lastAssistant = message;
+      } else {
+        this.lastAssistant = null;
+      }
+
+      const kind = sourceKindOf(type, data);
+      const bytes = byteLength(message.content);
+      items.push({
+        seq: seq,
+        kind: kind,
+        byte: bytes,
+        message: message,
+        /* Where this message is rendered in the conversation, so the viewer
+           can jump from a JSON row to its bubble. Computed once here, from
+           the same record the message was built from. */
+        link: messageLinkOf(type, data, role, raw),
+        track: [{ seq: seq, kind: kind, family: familyOf(kind), byte: bytes }],
+      });
+    };
+
+    /**
+     * Turn the records folded so far into the arrays one request needs.
+     *
+     * `historyEnd` (the index where this Turn's own messages start) is resolved
+     * once, at the first record at or past the Turn boundary, and then stays
+     * fixed — the boundary never moves, so recomputing it per snapshot would
+     * only burn time.
+     */
+    FoldState.prototype.view = function view() {
+      const snap = this.snapshot;
+      if (snap.stale) {
+        const items = this.items;
+        const messages = [];
+        const track = [];
+        const links = [];
+        const boundary = this.boundary;
+        let historyEnd = boundary < 0 ? 0 : null;
+        for (let i = 0; i < items.length; i += 1) {
+          const message = items[i].message;
+          if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length === 0) {
+            delete message.tool_calls;
+          }
+          /* `system/message` and `user/message` are INCREMENTAL records: an empty
+             one means "nothing new for this epoch", not "send an empty message".
+             Carrying it would put a message the model never saw into the payload. */
+          if (!message.tool_calls) {
+            const text = message.content;
+            if (typeof text !== 'string' || text.trim() === '') continue;
+          }
+          if (historyEnd === null && items[i].seq >= boundary) historyEnd = messages.length;
+          messages.push(message);
+          track.push(items[i].track);
+          links.push(items[i].link || null);
         }
-        /* `system/message` and `user/message` are INCREMENTAL records: an empty
-           one means "nothing new for this epoch", not "send an empty message".
-           Carrying it would put a message the model never saw into the payload. */
-        if (!message.tool_calls) {
-          const text = message.content;
-          if (typeof text !== 'string' || text.trim() === '') continue;
-        }
-        if (historyEnd === null && items[i].seq >= boundary) historyEnd = messages.length;
-        messages.push(message);
-        track.push(items[i].track);
-        links.push(items[i].link || null);
+        snap.messages = messages;
+        snap.track = track;
+        snap.links = links;
+        snap.historyEnd = historyEnd === null ? messages.length : historyEnd;
+        snap.stale = false;
       }
       return {
-        messages: messages,
-        historyEnd: historyEnd === null ? messages.length : historyEnd,
+        messages: snap.messages,
+        historyEnd: snap.historyEnd,
         /* Per-message provenance, aligned with `messages`. */
-        track: track,
+        track: snap.track,
         /* Per-message conversation target, aligned with `messages`. */
-        links: links,
+        links: snap.links,
       };
+    };
+
+    /**
+     * Convenience wrapper: fold the whole window up to `cutSeq` and return one
+     * snapshot. Used by the harness and by anything that needs a one-off answer;
+     * `buildTurnCalls` uses `FoldState` directly so a Turn folds the window once.
+     */
+    function buildMessages(events, cutSeq, turnStartSeq) {
+      const state = new FoldState(turnStartSeq);
+      for (let i = 0; i < events.length; i += 1) {
+        if (seqOf(events[i]) >= cutSeq) break;
+        state.consume(events[i]);
+      }
+      state.snapshot.stale = true;
+      return state.view();
     }
 
     /**
@@ -1150,101 +1276,103 @@ window.__ModuleLoader__.load({
         else if (nextStart >= 0) turnEndSeq = nextStart - 1;
       }
 
-      /* Keep every header visible in the window: they are sparse, and the one
-         that governs a step may sit in an earlier Turn. */
+      /* One pass over the window collects everything the Turn needs: the sparse
+         headers (the one governing a step may sit in an earlier Turn), the steps
+         it ran, each step's response/usage/source, and its tool traffic. These
+         used to be four full scans; on a 13 k-record window that alone cost
+         more than the fold. */
       const headers = [];
-      for (let i = 0; i < events.length; i += 1) {
-        const event = events[i];
-        if (typeOf(event) !== 'request/header') continue;
-        const data = dataOf(event);
-        headers.push({
-          seq: seqOf(event),
-          reason: data.reason,
-          startsSeries: data.startsSeries === true,
-          epoch: data.header && typeof data.header === 'object' ? data.header : {},
-        });
-      }
-
-      /* One model call per step. */
       const steps = [];
+      const responseByStep = {};
+      const toolsByStep = {};
+      let headerCursor = 0;
+
       for (let i = 0; i < events.length; i += 1) {
         const event = events[i];
-        if (typeOf(event) !== 'step/start') continue;
         const seq = seqOf(event);
-        if (seq < turnStartSeq) continue;
-        if (turnEndSeq >= 0 && seq > turnEndSeq) break;
+        const type = typeOf(event);
         const data = dataOf(event);
-        if (
-          turnNumber !== undefined &&
-          data.turn !== undefined &&
-          data.turn !== null &&
-          data.turn !== turnNumber
-        ) {
+
+        if (type === 'request/header') {
+          headers.push({
+            seq: seq,
+            reason: data.reason,
+            startsSeries: data.startsSeries === true,
+            epoch: data.header && typeof data.header === 'object' ? data.header : {},
+          });
           continue;
         }
-        steps.push({
-          step: typeof data.step === 'number' ? data.step : steps.length + 1,
-          seq: seq,
-        });
+
+        if (type === 'step/start') {
+          if (seq < turnStartSeq) continue;
+          if (turnEndSeq >= 0 && seq > turnEndSeq) continue;
+          if (
+            turnNumber !== undefined &&
+            data.turn !== undefined &&
+            data.turn !== null &&
+            data.turn !== turnNumber
+          ) {
+            continue;
+          }
+          steps.push({
+            step: typeof data.step === 'number' ? data.step : steps.length + 1,
+            seq: seq,
+          });
+          continue;
+        }
+
+        if (turnNumber !== undefined && data.turn !== turnNumber) continue;
+        if (data.step === undefined || data.step === null) continue;
+        const key = String(data.step);
+
+        if (type === 'assistant/message' || type === 'assistant/attempt') {
+          const entry = responseByStep[key] || (responseByStep[key] = { cutSeq: undefined, source: null, usage: null, endSeq: undefined });
+          if (entry.cutSeq === undefined) entry.cutSeq = seq;
+          /* The response is not the only thing a step writes: tool calls and tool
+             results follow it before the next step starts. The timeline needs the
+             whole span, so it closes at the last record carrying this step. */
+          entry.endSeq = seq;
+          if (type === 'assistant/message' && data.usage && typeof data.usage === 'object') {
+            entry.usage = data.usage;
+          }
+          if (!entry.source && type === 'assistant/message') {
+            const message = data.message;
+            const source = message && typeof message.source === 'object' ? message.source : null;
+            if (source) entry.source = source;
+          }
+        } else if (type === 'tool/call' || type === 'tool/result') {
+          const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [] });
+          if (type === 'tool/call') {
+            entry.calls += 1;
+            const response = responseByStep[key];
+            if (response) response.endSeq = Math.max(response.endSeq || 0, seq);
+            if (typeof data.name === 'string' && entry.names.indexOf(data.name) < 0) entry.names.push(data.name);
+          } else {
+            entry.results += 1;
+          }
+        }
       }
+
       if (!steps.length) return null;
 
-      /* Per step: the model it actually ran on, and where its own response
-         begins. A step records its injected messages *after* `step/start`, so
-         the request of step k is everything up to the first response event of
-         that step — not up to `step/start`. */
-      const responseByStep = {};
-      for (let i = 0; i < events.length; i += 1) {
-        const event = events[i];
-        const type = typeOf(event);
-        if (type !== 'assistant/message' && type !== 'assistant/attempt') continue;
-        const data = dataOf(event);
-        if (turnNumber !== undefined && data.turn !== turnNumber) continue;
-        const key = String(data.step);
-        const entry = responseByStep[key] || { cutSeq: undefined, source: null, usage: null, endSeq: undefined };
-        if (entry.cutSeq === undefined) entry.cutSeq = seqOf(event);
-        /* The response is not the only thing a step writes: tool calls and tool
-           results follow it before the next step starts. The timeline needs the
-           whole span, so it closes at the last record carrying this step. */
-        entry.endSeq = seqOf(event);
-        if (type === 'assistant/message' && data.usage && typeof data.usage === 'object') {
-          entry.usage = data.usage;
-        }
-        if (!entry.source && type === 'assistant/message') {
-          const message = data.message;
-          const source = message && typeof message.source === 'object' ? message.source : null;
-          if (source) entry.source = source;
-        }
-        responseByStep[key] = entry;
-      }
-
-      /* Tool traffic belongs to a step too, and it is the honest measure of how
-         heavy a step was: one call plus its result is one round-trip. Counted
-         here so the timeline can size and label each step without re-scanning. */
-      const toolsByStep = {};
-      for (let i = 0; i < events.length; i += 1) {
-        const event = events[i];
-        const type = typeOf(event);
-        if (type !== 'tool/call' && type !== 'tool/result') continue;
-        const data = dataOf(event);
-        if (turnNumber !== undefined && data.turn !== turnNumber) continue;
-        const key = String(data.step);
-        const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [] });
-        if (type === 'tool/call') {
-          entry.calls += 1;
-          const response = responseByStep[key];
-          if (response) response.endSeq = Math.max(response.endSeq || 0, seqOf(event));
-          if (typeof data.name === 'string' && entry.names.indexOf(data.name) < 0) entry.names.push(data.name);
-        } else {
-          entry.results += 1;
-        }
-      }
       /* A step without tool traffic still needs an entry, so the timeline can
          say "0 工具" instead of treating it as missing data. */
       for (let i = 0; i < steps.length; i += 1) {
         const key = String(steps[i].step);
         if (!toolsByStep[key]) toolsByStep[key] = { calls: 0, results: 0, names: [] };
       }
+
+      /* Fold the window ONCE. Each step's cut only moves forward, so the fold
+         state is advanced to the cut and its arrays snapshotted — a prefix of the
+         previous step's arrays, never a re-scan of the whole window. */
+      const fold = new FoldState(turnStartSeq);
+      let cursor = 0;
+
+      /* Source summaries are prefix aggregates too: call k's summary is call k−1's
+         plus whatever the new messages add, so they are accumulated as the fold
+         grows instead of being recomputed from the whole track 169 times. */
+      const sourceAll = newSourceAcc();
+      const sourceFresh = newSourceAcc();
 
       const calls = [];
       for (let i = 0; i < steps.length; i += 1) {
@@ -1268,11 +1396,20 @@ window.__ModuleLoader__.load({
               : stepInfo.seq + 1;
         const headerBound = nextSeq - 1;
 
-        let header = null;
-        for (let j = 0; j < headers.length; j += 1) {
-          if (headers[j].seq <= headerBound) header = headers[j];
-          else break;
+        /* Advance the fold up to (but not including) this step's cut. Cuts are
+           non-decreasing within a Turn, so `cursor` never rewinds. */
+        while (cursor < events.length && seqOf(events[cursor]) < cutSeq) {
+          fold.consume(events[cursor]);
+          cursor += 1;
         }
+        /* Anything folded past the cut cannot exist (cuts are non-decreasing),
+           but guard the invariant so a malformed log can never silently ship a
+           request with messages it never sent. */
+        fold.snapshot.stale = true;
+        const built = fold.view();
+
+        while (headerCursor < headers.length && headers[headerCursor].seq <= headerBound) headerCursor += 1;
+        const header = headerCursor > 0 ? headers[headerCursor - 1] : null;
         const epoch = header && header.epoch && typeof header.epoch === 'object' ? header.epoch : {};
         const config = epoch.config && typeof epoch.config === 'object' ? epoch.config : {};
         const source = response && response.source ? response.source : null;
@@ -1292,7 +1429,6 @@ window.__ModuleLoader__.load({
           request[key] = config[key];
         }
 
-        const built = buildMessages(events, cutSeq, turnStartSeq);
         request.messages = built.messages;
         const tools = Array.isArray(epoch.tools) ? epoch.tools : [];
         request.tools = tools;
@@ -1336,13 +1472,9 @@ window.__ModuleLoader__.load({
                two sides without re-deriving anything. */
             messageLinks: built.links,
             /* Why the messages are there, and which of them are new this Turn. */
-            sources: summarizeSources(built.track.map(firstRecord)),
-            freshSources: summarizeSources(
-              built.track.slice(built.historyEnd).map(function (items) {
-                return firstRecord(items, turnStartSeq);
-              }),
-            ),
-            freshBytes: freshBytes(built.track.slice(built.historyEnd), turnStartSeq),
+            sources: accSources(sourceAll, built.track),
+            freshSources: accFreshSources(sourceFresh, built.track, built.historyEnd, turnStartSeq),
+            freshBytes: freshBytes(built.track, turnStartSeq, built.historyEnd),
             tools: tools.length,
             usage: response && response.usage ? normalizeUsage(response.usage) : null,
             diff: diff,
@@ -1370,10 +1502,18 @@ window.__ModuleLoader__.load({
       return usable.length ? usable[0] : { kind: '', family: 'other', byte: 0, seq: -1 };
     }
 
-    /** Bytes this Turn wrote into the request (the rest is carried history). */
-    function freshBytes(track, onlyFrom) {
+    /**
+     * Bytes this Turn wrote into the request (the rest is carried history).
+     *
+     * `fromIndex` is `historyEnd`: messages before it are carried history, so the
+     * scan starts there instead of walking (and filtering) the whole track. The
+     * seq test stays as a safety net for a message whose first record predates the
+     * Turn boundary but which the fold kept (an assistant reply completed later).
+     */
+    function freshBytes(track, onlyFrom, fromIndex) {
       let total = 0;
-      for (let i = 0; i < track.length; i += 1) {
+      const start = typeof fromIndex === 'number' && fromIndex > 0 ? fromIndex : 0;
+      for (let i = start; i < track.length; i += 1) {
         const items = track[i];
         for (let j = 0; j < items.length; j += 1) {
           if (typeof onlyFrom === 'number' && items[j].seq < onlyFrom) continue;
@@ -1398,17 +1538,29 @@ window.__ModuleLoader__.load({
       const after = Array.isArray(next && next.messages) ? next.messages : [];
       const limit = Math.min(before.length, after.length);
 
+      /* Within a Turn both requests were snapshotted from the SAME fold, so the
+         previous one is a reference prefix of this one: identity (`===`) settles
+         the common prefix without stringifying a single message. Falls back to
+         structural equality for any pair that did not share a fold (e.g. the
+         harness comparing requests rebuilt independently). */
       let common = 0;
+      while (common < limit && before[common] === after[common]) common += 1;
       while (common < limit && sameMessage(before[common], after[common])) common += 1;
 
       /* Text fields outside `messages` (model, sampling controls, tools) — a
-         changed model or a different tool list is the interesting case. */
+         changed model or a different tool list is the interesting case. The tool
+         list is a large array shared by reference between steps of a Turn, so the
+         identity check short-circuits it; only a genuinely different array is
+         stringified. */
       const changed = [];
       const keys = Object.keys(next || {});
       for (let i = 0; i < keys.length; i += 1) {
         const key = keys[i];
         if (key === 'messages') continue;
-        if (stableJSON(prev ? prev[key] : undefined) !== stableJSON(next[key])) changed.push(key);
+        const a = prev ? prev[key] : undefined;
+        const b = next[key];
+        if (a === b) continue;
+        if (stableJSON(a) !== stableJSON(b)) changed.push(key);
       }
 
       const added = [];
@@ -1417,10 +1569,13 @@ window.__ModuleLoader__.load({
       }
 
       /* Anything the previous request had that this one does not, or that sits
-         before the prefix break, was rewritten rather than appended. */
+         before the prefix break, was rewritten rather than appended. Cheap case
+         first: when the previous fold is a reference prefix nothing was removed. */
       let removed = 0;
-      for (let i = common; i < before.length; i += 1) {
-        if (!sameMessage(before[i], after[i])) removed += 1;
+      if (common < before.length) {
+        for (let i = common; i < before.length; i += 1) {
+          if (before[i] !== after[i] && !sameMessage(before[i], after[i])) removed += 1;
+        }
       }
 
       return {
@@ -1428,7 +1583,7 @@ window.__ModuleLoader__.load({
         prefix: common,
         added: added,
         removed: removed,
-        rewritten: common < limit && !sameMessage(before[common], after[common]),
+        rewritten: common < limit && before[common] !== after[common] && !sameMessage(before[common], after[common]),
         changed: changed,
         prevMessages: before.length,
       };
