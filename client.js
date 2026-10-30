@@ -73,6 +73,15 @@ window.__ModuleLoader__.load({
           reasonLabel: '触发原因',
           jump: '对话',
           jumpTitle: '跳到这条消息在对话里的位置',
+    /* Tool round-trips: status badge on a `tool_calls` row, and the labels
+       inside its unfolded body. */
+    toolOk: '成功',
+    toolError: '失败',
+    toolMissing: '未返回',
+    toolBadgeTitle: '点击展开这次工具调用的参数和返回',
+    toolArguments: '参数',
+    toolResult: '结果',
+    toolNoResult: '（这一轮里没有找到对应的返回记录）',
           expandAll: '展开全部',
           collapseAll: '折叠全部',
           expand: '展开这一条',
@@ -162,6 +171,13 @@ window.__ModuleLoader__.load({
           reasonLabel: 'reason',
           jump: 'Chat',
           jumpTitle: 'Jump to where this message sits in the conversation',
+    toolOk: 'ok',
+    toolError: 'error',
+    toolMissing: 'no result',
+    toolBadgeTitle: 'Expand this call’s arguments and result',
+    toolArguments: 'arguments',
+    toolResult: 'result',
+    toolNoResult: '(no matching result recorded in this Turn)',
           expandAll: 'Expand all',
           collapseAll: 'Collapse all',
           expand: 'Expand this message',
@@ -586,6 +602,33 @@ window.__ModuleLoader__.load({
         borderRadius: '4px',
         outline: '2px solid var(--dsw-alias-brand-primary, #2f6fed)',
         outlineOffset: '1px',
+      },
+      /* Result badge on a `tool_calls` entry: ok / error / missing, plus the
+         round-trip time. Deliberately tiny and monospaced so a row with three
+         tool calls still reads as JSON. */
+      jsonToolBadge: {
+        display: 'inline-block',
+        marginLeft: '6px',
+        padding: '0 5px',
+        border: '1px solid transparent',
+        borderRadius: '4px',
+        fontSize: '11px',
+        lineHeight: '15px',
+        fontVariantNumeric: 'tabular-nums',
+        verticalAlign: 'middle',
+        cursor: 'pointer',
+      },
+      /* An opened tool call in the JSON tree: its arguments, then its result. */
+      jsonToolBody: {
+        marginLeft: '6px',
+        paddingLeft: '10px',
+        borderLeft: '1px dashed var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
+      },
+      jsonToolLabel: {
+        fontSize: '11px',
+        lineHeight: '16px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
       },
 
       tabs: {
@@ -1070,6 +1113,14 @@ window.__ModuleLoader__.load({
       this.items = [];
       this.lastAssistant = null;
       this.boundary = typeof turnStartSeq === 'number' && turnStartSeq >= 0 ? turnStartSeq : -1;
+      /* Every tool call the fold has consumed, keyed by callId, paired with its
+         result as soon as the result record shows up. Shared across the whole
+         window: a request carries the tool calls of earlier Turns, and the JSON
+         view wants their name/summary/result too. Grows by one entry per call,
+         never rescanned. */
+      this.toolDetails = {};
+      /* callId -> pending detail, so a result can find its call without a scan. */
+      this.toolCallIndex = {};
       /* Every kept message, and the three parallel arrays, are append-only from
          the perspective of a cut that only moves forward — which is exactly how
          one Turn calls the model. A snapshot is therefore a prefix. */
@@ -1081,13 +1132,41 @@ window.__ModuleLoader__.load({
       const seq = seqOf(event);
       const type = typeOf(event);
       const data = dataOf(event);
+      const at = typeof event.time === 'number' ? event.time : null;
       const items = this.items;
 
+      /* Tool traffic is tracked for the JSON view even when the record does not
+         contribute a message (a result is folded as a `tool` message, but a call
+         is an attribute of its assistant message). Recording both here keeps the
+         window-wide index complete and costs one object per record. */
+      if (type === 'tool/result') {
+        const message = data.message && typeof data.message === 'object' ? data.message : {};
+        const callId =
+          message.toolCallId !== undefined
+            ? message.toolCallId
+            : message.source && message.source.callId !== undefined
+              ? message.source.callId
+              : undefined;
+        if (callId !== undefined) {
+          const text = flattenContent(message.content);
+          const detail = this.toolDetails[String(callId)];
+          if (detail) {
+            detail.status = message.isError === true ? 'error' : 'ok';
+            detail.durationMs = typeof detail.time === 'number' && typeof at === 'number' ? Math.max(0, at - detail.time) : null;
+            detail.result = { text: text, bytes: byteLength(text), isError: message.isError === true, seq: seq };
+          }
+        }
+      }
+
       if (type === 'tool/call') {
+        const callId = data.callId !== undefined ? data.callId : data.toolCallId;
+        if (callId !== undefined) {
+          this.toolDetails[String(callId)] = makeToolDetail(callId, data.name, data.arguments, seq, at);
+        }
         const lastAssistant = this.lastAssistant;
         if (lastAssistant && Array.isArray(lastAssistant.tool_calls)) {
           lastAssistant.tool_calls.push({
-            id: data.callId !== undefined ? data.callId : data.toolCallId,
+            id: callId,
             type: 'function',
             function: {
               name: data.name,
@@ -1285,6 +1364,7 @@ window.__ModuleLoader__.load({
       const steps = [];
       const responseByStep = {};
       const toolsByStep = {};
+      const orphans = [];
       let headerCursor = 0;
 
       for (let i = 0; i < events.length; i += 1) {
@@ -1292,6 +1372,9 @@ window.__ModuleLoader__.load({
         const seq = seqOf(event);
         const type = typeOf(event);
         const data = dataOf(event);
+        /* Wall clock lives on the record, not inside `data`; tool round-trip
+           duration is the only thing it is used for here. */
+        const at = typeof event.time === 'number' ? event.time : null;
 
         if (type === 'request/header') {
           headers.push({
@@ -1341,14 +1424,44 @@ window.__ModuleLoader__.load({
             if (source) entry.source = source;
           }
         } else if (type === 'tool/call' || type === 'tool/result') {
-          const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [] });
+          const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [], details: [] });
           if (type === 'tool/call') {
             entry.calls += 1;
             const response = responseByStep[key];
             if (response) response.endSeq = Math.max(response.endSeq || 0, seq);
             if (typeof data.name === 'string' && entry.names.indexOf(data.name) < 0) entry.names.push(data.name);
+            entry.details.push({
+              callId: data.callId !== undefined ? data.callId : data.toolCallId,
+              name: typeof data.name === 'string' ? data.name : '',
+              arguments: data.arguments,
+              seq: seq,
+              time: at,
+              /* Filled in when the matching tool/result shows up. */
+              result: null,
+            });
           } else {
             entry.results += 1;
+            /* Pair by callId, which both sides carry. A result whose call sits in
+               an earlier step or earlier Turn is still the truth about that call,
+               so pairing scans the whole Turn's accumulated log, not this step. */
+            const message = data.message && typeof data.message === 'object' ? data.message : {};
+            const callId =
+              message.toolCallId !== undefined
+                ? message.toolCallId
+                : message.source && message.source.callId !== undefined
+                  ? message.source.callId
+                  : undefined;
+            const owner = callId === undefined ? null : findToolCall(toolsByStep, callId);
+            const text = flattenContent(message.content);
+            const filled = {
+              isError: message.isError === true,
+              text: text,
+              bytes: byteLength(text),
+              seq: seq,
+              time: at,
+            };
+            if (owner) owner.result = filled;
+            else orphans.push({ step: key, callId: callId === undefined ? null : callId, result: filled });
           }
         }
       }
@@ -1359,7 +1472,7 @@ window.__ModuleLoader__.load({
          say "0 工具" instead of treating it as missing data. */
       for (let i = 0; i < steps.length; i += 1) {
         const key = String(steps[i].step);
-        if (!toolsByStep[key]) toolsByStep[key] = { calls: 0, results: 0, names: [] };
+        if (!toolsByStep[key]) toolsByStep[key] = { calls: 0, results: 0, names: [], details: [] };
       }
 
       /* Fold the window ONCE. Each step's cut only moves forward, so the fold
@@ -1373,6 +1486,16 @@ window.__ModuleLoader__.load({
          grows instead of being recomputed from the whole track 169 times. */
       const sourceAll = newSourceAcc();
       const sourceFresh = newSourceAcc();
+
+      /* Every tool call the fold has seen so far, keyed by callId.
+       *
+       * This deliberately spans the whole WINDOW, not just this Turn: a request
+       * carries the `tool_calls` of every earlier Turn as well, and those rows
+       * deserve the same name/summary/result treatment. It is built as the fold
+       * advances (`FoldState` records each call as it consumes the log), so the
+       * cost is one entry per tool call in the window — not a rescan.
+       */
+      const turnDetailsById = fold.toolDetails;
 
       const calls = [];
       for (let i = 0; i < steps.length; i += 1) {
@@ -1463,6 +1586,22 @@ window.__ModuleLoader__.load({
             toolCalls: toolsByStep[String(stepInfo.step)].calls,
             toolResults: toolsByStep[String(stepInfo.step)].results,
             toolNames: toolsByStep[String(stepInfo.step)].names,
+            /* One entry per tool call this step made, paired with its result:
+               name, argument summary, ok/error/missing, duration and result
+               size. The viewer's JSON rows and the 工具往返 panel both read this,
+               so neither has to re-scan the log. */
+            toolCallDetails: toolCallDetailsOf(toolsByStep[String(stepInfo.step)].details),
+            /* Same entries, keyed by callId, so a `tool_calls` array in the JSON
+               can look up each call even when it was made by an earlier step. */
+            toolDetailsByCallId: turnDetailsById,
+            /* Results whose call record sits outside this Turn (rare, e.g. a
+               result delivered after the Turn closed). Kept so nothing is
+               silently dropped from the panel. */
+            orphanToolResults: orphans.filter(function (item) {
+              return item.step === String(stepInfo.step);
+            }).map(function (item) {
+              return { callId: item.callId, result: item.result };
+            }),
             /* Index where this Turn's own messages start; the viewer folds
                everything before it. Kept on `meta`, never inside `request`, so
                the payload itself stays byte-for-byte what was sent. */
@@ -1483,6 +1622,145 @@ window.__ModuleLoader__.load({
       }
 
       return { turn: turnNumber, calls: calls };
+    }
+
+    /**
+     * Find the `tool/call` record that a `tool/result` answers.
+     *
+     * The result frequently lands in the SAME step as its call, but a Turn can
+     * also carry results for calls made in an earlier step, so the lookup walks
+     * every step's list rather than only the current one. Tool lists are short
+     * (tens per Turn), and each result is paired exactly once.
+     */
+    function findToolCall(toolsByStep, callId) {
+      const keys = Object.keys(toolsByStep);
+      for (let i = 0; i < keys.length; i += 1) {
+        const details = toolsByStep[keys[i]].details || [];
+        for (let j = 0; j < details.length; j += 1) {
+          if (details[j].callId === callId && !details[j].result) return details[j];
+        }
+      }
+      return null;
+    }
+
+    /**
+     * One display-ready tool call, before its result is known.
+     *
+     * `arguments` in the log is a JSON *string*; parsing it here lets the viewer
+     * show a one-line summary (the interesting fields) instead of a quoted blob,
+     * while keeping the raw string for the "full" view. A parse failure is normal
+     * (a truncated streaming argument) and falls back to the raw text.
+     */
+    function makeToolDetail(callId, name, raw, seq, time) {
+      let parsed;
+      let parsedOk = false;
+      if (raw && typeof raw === 'object') {
+        parsed = raw;
+        parsedOk = true;
+      } else if (typeof raw === 'string' && raw.trim() !== '') {
+        try {
+          parsed = JSON.parse(raw);
+          parsedOk = true;
+        } catch (err) {
+          parsed = undefined;
+        }
+      }
+      return {
+        callId: callId === undefined ? null : callId,
+        name: typeof name === 'string' ? name : '',
+        /* `arguments` exactly as the model emitted them (a string). */
+        argumentsText: typeof raw === 'string' ? raw : raw === undefined ? undefined : JSON.stringify(raw),
+        argumentsJson: parsedOk ? parsed : undefined,
+        argumentsOk: parsedOk,
+        summary: summaryOfCall(name, parsedOk ? parsed : undefined, raw),
+        argumentsBytes: byteLength(typeof raw === 'string' ? raw : JSON.stringify(raw === undefined ? null : raw)),
+        status: 'missing',
+        durationMs: null,
+        result: null,
+        seq: seq,
+        time: typeof time === 'number' ? time : null,
+      };
+    }
+
+    /**
+     * Compact, display-ready form of one step's tool traffic.
+     *
+     * `arguments` in the log is a JSON *string*; parsing it here lets the viewer
+     * show a one-line summary (the interesting fields) instead of a quoted blob,
+     * while keeping the raw string for the "full" view. A parse failure is normal
+     * (truncated streaming arguments) and falls back to the raw text.
+     */
+    function toolCallDetailsOf(details) {
+      const out = [];
+      for (let i = 0; i < details.length; i += 1) {
+        const call = details[i];
+        const raw = call.arguments;
+        let parsed;
+        let parsedOk = false;
+        if (raw && typeof raw === 'object') {
+          parsed = raw;
+          parsedOk = true;
+        } else if (typeof raw === 'string' && raw.trim() !== '') {
+          try {
+            parsed = JSON.parse(raw);
+            parsedOk = true;
+          } catch (err) {
+            parsed = undefined;
+          }
+        }
+        const result = call.result;
+        out.push({
+          callId: call.callId === undefined ? null : call.callId,
+          name: call.name,
+          /* `arguments` exactly as the model emitted them (a string), so the
+             panel can show the payload verbatim when asked. */
+          argumentsText: typeof raw === 'string' ? raw : raw === undefined ? undefined : JSON.stringify(raw),
+          argumentsJson: parsedOk ? parsed : undefined,
+          argumentsOk: parsedOk,
+          /* A one-line shape hint: `name(arg=value, …)` with long values cut. */
+          summary: summaryOfCall(call.name, parsedOk ? parsed : undefined, raw),
+          argumentsBytes: byteLength(typeof raw === 'string' ? raw : JSON.stringify(raw === undefined ? null : raw)),
+          status: result ? (result.isError ? 'error' : 'ok') : 'missing',
+          durationMs:
+            result && typeof call.time === 'number' && typeof result.time === 'number'
+              ? Math.max(0, result.time - call.time)
+              : null,
+          result: result
+            ? {
+                text: result.text,
+                bytes: result.bytes,
+                isError: result.isError,
+                seq: result.seq,
+              }
+            : null,
+          seq: call.seq,
+        });
+      }
+      return out;
+    }
+
+    /** `read(path=client.js)` — the arguments' shape in one short line. */
+    function summaryOfCall(name, parsed, raw) {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        if (typeof raw === 'string' && raw.trim() !== '') return shorten(flattenContent(raw), 80);
+        return '';
+      }
+      const keys = Object.keys(parsed);
+      if (!keys.length) return '';
+      const parts = [];
+      for (let i = 0; i < keys.length && i < 3; i += 1) {
+        const value = parsed[keys[i]];
+        const shown =
+          typeof value === 'string' ? shorten(value, 42) : shorten(JSON.stringify(value), 42);
+        parts.push(keys[i] + '=' + shown);
+      }
+      if (keys.length > 3) parts.push('…');
+      return parts.join(', ');
+    }
+
+    function shorten(text, limit) {
+      const value = String(text === undefined || text === null ? '' : text).replace(/\s+/gu, ' ');
+      return value.length > limit ? value.slice(0, limit - 1) + '…' : value;
     }
 
     /**
@@ -1961,6 +2239,11 @@ window.__ModuleLoader__.load({
     const EXPAND_ALL_DEPTH = 6;
     /* Tabs read best for a handful of calls; beyond this they become a step list. */
     const TAB_LIMIT = 12;
+    /* How much of a tool result to show inline before truncating with a byte note.
+       The full text stays in the copied JSON, so this only bounds one screen. */
+    const TOOL_RESULT_PREVIEW = 2000;
+    /* Label above a tool call's result block, keyed by the pairing status. */
+    const DETAIL_RESULT_LABEL = { ok: '结果', error: '错误', missing: '没有结果记录' };
 
     /*
      * JSON syntax colours are the one place the alias-token set is too coarse
@@ -1992,6 +2275,13 @@ window.__ModuleLoader__.load({
         famModel: '#8250df',
         famTool: '#1a7f37',
         famOther: '#8c959f',
+        /* Tool round-trip status: success / failure / no result recorded. */
+        toolOk: '#1a7f37',
+        toolOkBg: 'rgba(26,127,55,0.10)',
+        toolErr: '#cf222e',
+        toolErrBg: 'rgba(207,34,46,0.10)',
+        toolMiss: '#8c959f',
+        toolMissBg: 'rgba(140,149,159,0.12)',
       },
       dark: {
         key: '#d2a8ff',
@@ -2012,6 +2302,12 @@ window.__ModuleLoader__.load({
         famModel: '#d2a8ff',
         famTool: '#3fb950',
         famOther: '#6e7681',
+        toolOk: '#3fb950',
+        toolOkBg: 'rgba(63,185,80,0.14)',
+        toolErr: '#f85149',
+        toolErrBg: 'rgba(248,81,73,0.14)',
+        toolMiss: '#6e7681',
+        toolMissBg: 'rgba(110,118,129,0.18)',
       },
     };
 
@@ -2031,8 +2327,23 @@ window.__ModuleLoader__.load({
       return value + ' B';
     }
 
-    /* Exact form for the detail line: 80285 -> "80,285". */
-    function formatExact(value) {
+    /* Round-trip time of one tool call: 21 -> "21ms", 1281 -> "1.3s". */
+    function formatDuration(ms) {
+      if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return '-';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+      return Math.floor(ms / 60000) + 'm' + Math.round((ms % 60000) / 1000) + 's';
+    }
+
+    /* Result text is shown inline while unfolded; keep one row from turning into
+       a multi-megabyte paste. The full text is still in the copyable JSON. */
+    function clampText(text) {
+      const value = typeof text === 'string' ? text : text === undefined || text === null ? '' : String(text);
+      if (value.length <= TOOL_RESULT_PREVIEW) return value;
+      return value.slice(0, TOOL_RESULT_PREVIEW) + '\n… (' + formatBytes(byteLength(value) - TOOL_RESULT_PREVIEW) + ' more)';
+    }
+
+    /* Exact form for the detail line: 80285 -> "80,285". */    function formatExact(value) {
       if (typeof value !== 'number' || !isFinite(value)) return '-';
       const rounded = Math.round(value);
       const text = String(rounded);
@@ -2161,6 +2472,156 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Order one `tool_calls` array's entries against the Turn's detail index.
+     *
+     * The JSON keeps the array in the order the model emitted it, so the rows do
+     * too. An entry whose call has no record in the index (should not happen for
+     * a request that was actually sent, but a rebuilt prefix can outrun the log)
+     * still renders, as a `missing` call built from the entry itself.
+     */
+    function detailRowsFor(entries, byCallId) {
+      const rows = [];
+      for (let i = 0; i < entries.length; i += 1) {
+        const entry = entries[i];
+        const id = entry && entry.id !== undefined ? entry.id : null;
+        const detail = id === null ? null : byCallId[String(id)];
+        if (detail) {
+          rows.push(detail);
+          continue;
+        }
+        const fn = entry && entry.function && typeof entry.function === 'object' ? entry.function : {};
+        const rawArgs = fn.arguments;
+        rows.push({
+          callId: id,
+          name: typeof fn.name === 'string' ? fn.name : '',
+          argumentsText: typeof rawArgs === 'string' ? rawArgs : rawArgs === undefined ? undefined : JSON.stringify(rawArgs),
+          argumentsJson: undefined,
+          argumentsOk: false,
+          summary: typeof rawArgs === 'string' ? shorten(rawArgs.replace(/\s+/gu, ' '), 80) : '',
+          argumentsBytes: byteLength(typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs === undefined ? null : rawArgs)),
+          status: 'missing',
+          durationMs: null,
+          result: null,
+          seq: -1,
+        });
+      }
+      return rows;
+    }
+
+    /**
+     * A `tool_calls` array, rendered from the step's paired call/result details.
+     *
+     * Each row is one call: the tool name, a one-line argument summary, and a
+     * status badge (`ok` / `error` / `missing`) carrying the round-trip time.
+     * Clicking a row unfolds the call's arguments and its result text, so the
+     * JSON never loses information — it just stops making you read Base64-shaped
+     * argument blobs to find them.
+     */
+    function ToolCallsNode(props) {
+      const details = props.details;
+      const pal = props.pal || PALETTES.light;
+      const indentation = props.indentation;
+      const [openIdx, setOpenIdx] = React.useState(-1);
+
+      const rows = [];
+      for (let i = 0; i < details.length; i += 1) {
+        const detail = details[i];
+        const open = openIdx === i;
+        const statusColor = detail.status === 'ok' ? pal.toolOk : detail.status === 'error' ? pal.toolErr : pal.toolMiss;
+        const statusBg =
+          detail.status === 'ok' ? pal.toolOkBg : detail.status === 'error' ? pal.toolErrBg : pal.toolMissBg;
+
+        rows.push(
+          h(
+            'div',
+            {
+              key: 'r' + i,
+              style: STYLE.jsonLine,
+              title: detail.argumentsText === undefined ? detail.name : detail.argumentsText,
+            },
+            h('span', { key: 't', style: { display: 'inline-block', width: '14px', color: pal.toggle, fontWeight: 700 } }, open ? '▾' : '▸'),
+            h('span', { key: 'i', style: { color: pal.number } }, String(i)),
+            h('span', { key: 'c', style: { color: pal.punct } }, ': { '),
+            h('span', { key: 'n', style: { color: pal.key, fontWeight: 600 } }, detail.name || '(unnamed)'),
+            h('span', { key: 'p', style: { color: pal.punct } }, '('),
+            h('span', { key: 's', style: { color: pal.string } }, detail.summary || ''),
+            h('span', { key: 'q', style: { color: pal.punct } }, ') '),
+            h(
+              'span',
+              {
+                key: 'b',
+                className: 'dsh-pl-toolbadge',
+                style: Object.assign({}, STYLE.jsonToolBadge, { color: statusColor, background: statusBg, borderColor: statusBg }),
+                onClick: (event) => {
+                  if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+                  setOpenIdx(open ? -1 : i);
+                },
+                title: TEXT.toolBadgeTitle,
+              },
+              detail.status === 'ok' ? TEXT.toolOk : detail.status === 'error' ? TEXT.toolError : TEXT.toolMissing,
+              detail.durationMs === null ? '' : ' · ' + formatDuration(detail.durationMs),
+            ),
+            h('span', { key: 'z', style: { color: pal.punct } }, ' }'),
+          ),
+        );
+
+        if (!open) continue;
+
+        rows.push(
+          h(
+            'div',
+            { key: 'd' + i, style: Object.assign({}, STYLE.jsonToolBody, indentation) },
+            h('div', { key: 'al', style: Object.assign({}, STYLE.jsonToolLabel, { color: pal.punct }) }, TEXT.toolArguments),
+            h(
+              'div',
+              { key: 'a', style: STYLE.jsonLine },
+              h('span', { style: { color: pal.string } }, detail.argumentsText === undefined ? '(none)' : detail.argumentsText),
+              h('span', { style: { color: pal.nil } }, '  ' + formatBytes(detail.argumentsBytes)),
+            ),
+            h(
+              'div',
+              { key: 'rl', style: Object.assign({}, STYLE.jsonToolLabel, { color: pal.punct, marginTop: '4px' }) },
+              DETAIL_RESULT_LABEL[detail.status] || TEXT.toolResult,
+              detail.result ? h('span', { style: { color: pal.nil, textTransform: 'none', letterSpacing: '0' } }, '  ' + formatBytes(detail.result.bytes)) : null,
+            ),
+            detail.result
+              ? h(
+                  'div',
+                  {
+                    key: 'r',
+                    style: Object.assign({}, STYLE.jsonLine, {
+                      color: detail.result.isError ? pal.toolErr : undefined,
+                      whiteSpace: 'pre-wrap',
+                    }),
+                  },
+                  clampText(detail.result.text),
+                )
+              : h('div', { key: 'r', style: Object.assign({}, STYLE.jsonLine, { color: pal.nil, fontStyle: 'italic' }) }, TEXT.toolNoResult),
+          ),
+        );
+      }
+
+      return h(
+        'div',
+        { style: STYLE.jsonNode },
+        h(
+          'div',
+          { style: Object.assign({}, STYLE.jsonLine, indentation), id: props.focusId },
+          props.label,
+          h('span', { key: 'c', style: { color: pal.punct } }, ': ['),
+          h('span', { key: 'n', style: { color: pal.punct, fontStyle: 'italic' } }, ' ' + details.length + ' calls '),
+          h('span', { key: 'e', style: { color: pal.punct } }, ']'),
+        ),
+        h('div', { key: 'c', style: STYLE.jsonGuide }, rows),
+        h(
+          'div',
+          { key: 'f', style: Object.assign({}, STYLE.jsonLine, indentation) },
+          h('span', { style: { color: pal.punct } }, ']'),
+        ),
+      );
+    }
+
+    /**
      * A collapsible JSON node. Children are only created while the node is
      * open, which is what keeps a 500-message `messages` array cheap: the array
      * renders one collapsed line per message, not the whole tree.
@@ -2202,6 +2663,9 @@ window.__ModuleLoader__.load({
       if (Array.isArray(props.messageLinks)) childProps.messageLinks = props.messageLinks;
       if (typeof props.onJump === 'function') childProps.onJump = props.onJump;
       if (typeof props.focusKey === 'string') childProps.focusKey = props.focusKey;
+      if (Array.isArray(props.toolDetailsByCallId) || (props.toolDetailsByCallId && typeof props.toolDetailsByCallId === 'object')) {
+        childProps.toolDetailsByCallId = props.toolDetailsByCallId;
+      }
       const forwarded = Object.keys(childProps).length ? childProps : null;
 
       const [open, setOpen] = React.useState(
@@ -2225,6 +2689,32 @@ window.__ModuleLoader__.load({
       }
 
       const size = isArray ? value.length : Object.keys(value).length;
+
+      /* A `tool_calls` array: each entry is one tool call, and the details for
+         every call of the Turn (name, arguments, result, duration) are already
+         computed in `meta.toolDetailsByCallId`. Resolving each entry through its
+         `id` turns a wall of `{"id":"call_…","function":{…,"arguments":"{…}"}}`
+         into `read(path=…)  ✓ 21ms`, with the full result one click away. The
+         lookup is by id, not by position, because a request carries the tool
+         calls of earlier steps too. */
+      const toolDetails =
+        isArray && name === 'tool_calls' && props.toolDetailsByCallId
+          ? detailRowsFor(value, props.toolDetailsByCallId)
+          : null;
+      if (toolDetails) {
+        return wrap(
+          wrapStyle,
+          h(ToolCallsNode, {
+            key: 'tc',
+            details: toolDetails,
+            pal: pal,
+            indentation: indentation,
+            label: label,
+            focusId: focusId,
+          }),
+        );
+      }
+
       const head = h(
         'div',
         {
@@ -2297,7 +2787,7 @@ window.__ModuleLoader__.load({
           }),
         ].concat(
           value.slice(historyEnd).map((item, index) =>
-            h(JsonNode, {
+            h(JsonNode, Object.assign({
               key: historyEnd + index,
               name: String(historyEnd + index),
               value: item,
@@ -2308,22 +2798,15 @@ window.__ModuleLoader__.load({
               jump: links ? links[historyEnd + index] || null : null,
               onJump: onJump,
               focus: markFocus(links ? links[historyEnd + index] : null),
-            }),
+            }, forwarded)),
           ),
         );
       } else if (isArray) {
         children = value.map((item, index) =>
-          h(JsonNode, {
-            key: index,
-            name: String(index),
-            value: item,
-            depth: depth + 1,
-            mode: mode,
-            pal: pal,
-            jump: links ? links[index] || null : null,
-            onJump: onJump,
-            focus: markFocus(links ? links[index] : null),
-          }),
+          h(
+            JsonNode,
+            Object.assign({ key: index, name: String(index), value: item, depth: depth + 1, mode: mode, pal: pal, jump: links ? links[index] || null : null, onJump: onJump, focus: markFocus(links ? links[index] : null) }, forwarded),
+          ),
         );
       } else {
         children = Object.keys(value).map((key) =>
@@ -3151,6 +3634,10 @@ window.__ModuleLoader__.load({
               messagesHistoryEnd: meta.historyEnd,
               /* One conversation-row target per message, so a row can jump. */
               messageLinks: meta.messageLinks,
+              /* One display-ready entry per tool call this step made, paired with
+                 its result; a `tool_calls` array renders through it. */
+              toolCallDetails: meta.toolCallDetails,
+              toolDetailsByCallId: meta.toolDetailsByCallId,
               onJump: jumpToMessage,
               /* The message this dialog was opened from: banded + scrolled to. */
               focusKey: payload.focusKey,

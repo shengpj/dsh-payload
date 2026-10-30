@@ -23,6 +23,7 @@
   每行前面有 `▸`，点开就是**这条消息本身的完整 JSON**（和右侧大 JSON 共用同一个可折叠树），所以「摘要不够全」的时候一键就能看到原文。上一版只取 `content` 平铺后的前 96 字，导致所有工具调用行都以 `{"type":"tool-call","id":"call_00_avGl…` 开头、真正有用的部分全被截掉——158 条新增里有 130 条是这种情况。
 
   列表高度按内容的 40vh 封顶（原先是 132px，只放得下 6 行）。另外单独标出 `-n`（有消息消失，通常意味着发生了什么压缩）、「原地改写」和「参数变化」（换了 model 或采样参数）。一轮的第一次调用直接写「本轮第一次调用，没有可比较的上一次」。
+- **工具调用卡片**：`tool_calls` 数组里的每条调用行显示 `工具名(参数摘要)` + 状态徽标（`成功 · 21ms` / `失败 · 1.3s` / `未返回`），悬停即看原始参数 JSON；点徽标展开这张卡片的完整**参数**与**结果**正文（各带字节数，失败结果整段标红）。状态、耗时、结果字节都来自本轮日志里配对的 `tool/call` + `tool/result`，不是解析参数猜的；本次请求里出现、但这轮日志里没有记录的调用（历史被截断时会有）降级成 `未返回` 并保留原始参数，不会凭空消失。
 - **上下文来源占比**：弹框底部把这次请求的 `messages` 按来源分成五类并给出条数与占比——你的输入、harness 自动注入（时间上下文、运行时上下文、技能目录、系统提示、后台任务回报…）、模型回复、工具往返。图例默认只有一行，点某一类才展开它由哪些小类组成（例如「自动注入 41」拆成「时间上下文 33 · 运行时上下文 7 · 技能目录 1」）；旁边标出「本轮新增」占多少，用来回答「上下文为什么涨这么快」。占比按**消息字节**算，不是 token。
 - **本轮时间线**：一轮里有多次调用时，头部多一条时间线——一步一段，宽度按该步实际消耗的 token 算（输入 + 缓存 + 输出），点哪段就切到哪次调用，一眼看出这轮的钱花在哪几步；右端是这一轮的总 token。它和下方的 `#1 #2 #3` 标签页 / 左侧 step 列表**分工不重复**：标签页和列表回答「选第几次调用」（并给出条数、step 号），时间线只回答「占比」，所以不再重复印一遍 `#k · step n · token`。工具数、往返数、工具名也都不印——前两个每步恒为「1」，工具名描述的是这一步**产出**的调用，而这套编号指向**请求快照**，混在一起容易误读成「这次请求里有那个调用」。
 - **JSON ↔ 对话互链**：`messages` 里每条消息的行上都常驻一个 `对话 ↗` 小标签（不靠悬停，行高不会因此跳动），点它关掉弹框、并把对话滚动到**这条消息自己的气泡**（精确到 `data-chat-node-key`；气泡在折叠的轮次里没挂载时，退回滚到该轮 `data-chat-turn`）。反方向同理：从某条回复的按钮打开弹框时，那份 JSON 会直接停在**这条回复对应的那一行**并加一圈高亮，不用自己去几百条消息里找。
@@ -67,7 +68,8 @@ git clone https://github.com/shengpj/dsh-payload.git
 2. 点击，弹框打开并**直接停在产生这条回复的那次调用**上。
 3. `messages` 默认只展开本轮新产生的消息：更早的历史收在 `历史消息 (n)` 这一行里，点开即可看到完整上下文；数组标题上的 `本轮 n` / `历史 n` 告诉你各有多少条。
 4. 若这条回复所在的 Turn 调用了很多次，用标签页或左侧列表切换，看每一次各自发了什么。
-5. 「复制」拿走当前这份请求，「复制全部调用」拿走整轮所有请求组成的数组。
+5. `tool_calls` 里的行是工具调用卡片：徽标给出成败与往返耗时，悬停看原始参数，点徽标展开参数与结果正文。
+6. 「复制」拿走当前这份请求，「复制全部调用」拿走整轮所有请求组成的数组。
 
 ## 数据来源
 
@@ -82,6 +84,7 @@ git clone https://github.com/shengpj/dsh-payload.git
 | `messages` | 该 step 首个响应事件之前的所有 surface 事件：`system/message`、`developer/message`、`user/message`、`assistant/message`、`tool/result`；`tool/call` 会挂到前一条 assistant 消息的 `tool_calls` 上 |
 | 本轮 / 历史的切分 | 这条回复所属 Turn 的 `turn/start.seq`：seq 不小于它的消息算本轮（用户消息、本轮注入的上下文、这一轮已产生的 assistant 与工具结果），更早的是历史 |
 | token 用量 | 该 step 的 `assistant/message.data.usage`（provider 上报的真实值，不是估算） |
+| 工具调用的状态/耗时/结果 | `tool/call`（`callId`、`name`、`arguments` 原串、`time`）与 `tool/result`（`callId`、`isError`、正文）按 `callId` 配对；耗时 = 两条记录的 `time` 差，结果字节 = 正文的 UTF-8 长度 |
 
 `request/header` 只在调用配置发生变化时才写一条（`reason` 为 `initial` / `change` / `resume` / `series`），不是每次调用都有——所以分组锚点用 `step/start`，配置从不超过该 step 的最近一条 header 继承。
 
@@ -126,7 +129,7 @@ index.js                     Host 半边（空 apply，只为让 bundle 有个 h
 client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
 cordis.patch.yml             装进 profile 时插入的条目
 tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射与本轮/历史切分
-tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 12 个场景（含错误边界）
+tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 13 个场景（含错误边界、工具卡片）
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -139,7 +142,7 @@ market/index.json                  插件市场索引（format 1）
 ```bash
 node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
 node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
-node tools/render-smoke.cjs                       # 渲染：12 个场景
+node tools/render-smoke.cjs                       # 渲染：13 个场景
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 

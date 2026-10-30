@@ -1,6 +1,6 @@
 {
   "name": "dsh-payload",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "DSH Web GUI plugin: inspect the exact payload sent to the model for every assistant reply.",
   "type": "module",
   "license": "MIT",
@@ -46,3 +46,4 @@
     }
   }
 }
+

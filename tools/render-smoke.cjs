@@ -499,16 +499,128 @@ const failedText = failedTree.text.join(' ');
 expect(failedText.includes('boom from the JSON pane'), 'boundary did not print the failure: ' + failedText.slice(0, 120));
 expect(/读取失败|Read failed/.test(failedText), 'boundary does not use the error wording');
 
+/* m) tool cards: every entry of a `tool_calls` array is resolved by its id
+      through the window-wide detail map, so one request can show calls made
+      in earlier steps too. A call with no recorded result keeps its row and
+      says so instead of silently vanishing. `all` mode expands the message
+      objects too, which is the only way a `tool_calls` array becomes visible. */
+function makeToolCall(byId, calls) {
+  const toolCall = makeCall(1, 5, 4, 100);
+  toolCall.request.messages.push({ role: 'assistant', content: null, tool_calls: calls });
+  toolCall.meta.toolDetailsByCallId = byId;
+  return toolCall;
+}
+/* `all` mode expands every container; that is the mode a reader uses to reach
+   a `tool_calls` array, so the scenario renders in it. */
+function allMode(helper) {
+  return function render(node, sink) {
+    if (node === null || node === undefined || node === false) return;
+    if (typeof node === 'string' || typeof node === 'number') { sink.text.push(String(node)); return; }
+    if (Array.isArray(node)) { node.forEach((child) => render(child, sink)); return; }
+    if (typeof node.type === 'function') { render(node.type(Object.assign({}, node.props, { mode: 'all' })), sink); return; }
+    const className = node.props && node.props.className;
+    if (typeof className === 'string') {
+      sink.classes.push(className);
+      if (typeof node.props.title === 'string') sink.tips.push(node.props.title);
+    }
+    (node.props.children || []).forEach((child) => render(child, sink));
+  };
+}
+const walkAll = (element) => {
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [] };
+  allMode()(element, sink);
+  return sink;
+};
+const toolRows = [
+  { id: 'call_ok', type: 'function', function: { name: 'read', arguments: '{"file_path":"a.js"}' } },
+  { id: 'call_err', type: 'function', function: { name: 'pwsh', arguments: '{"command":"git nope"}' } },
+  { id: 'call_missing', type: 'function', function: { name: 'grep', arguments: '{"pattern":"TODO"}' } },
+];
+const toolWalk = walkAll(
+  DialogBody({
+    payload: payload([
+      makeToolCall(
+        {
+          call_ok: {
+            callId: 'call_ok', name: 'read', argumentsText: '{"file_path":"a.js"}', argumentsJson: { file_path: 'a.js' },
+            argumentsOk: true, summary: 'file_path=a.js', argumentsBytes: 24, status: 'ok', durationMs: 21, seq: 1, time: 0,
+            result: { text: 'line one\nline two', bytes: 17, isError: false, seq: 2 },
+          },
+          call_err: {
+            callId: 'call_err', name: 'pwsh', argumentsText: '{"command":"git nope"}', argumentsJson: { command: 'git nope' },
+            argumentsOk: true, summary: 'command=git nope', argumentsBytes: 24, status: 'error', durationMs: 1300, seq: 3, time: 0,
+            result: { text: 'boom', bytes: 4, isError: true, seq: 4 },
+          },
+          call_missing: {
+            callId: 'call_missing', name: 'grep', argumentsText: '{"pattern":"TODO"}', argumentsJson: { pattern: 'TODO' },
+            argumentsOk: true, summary: 'pattern=TODO', argumentsBytes: 18, status: 'missing', durationMs: null, seq: 5, time: 0, result: null,
+          },
+        },
+        toolRows,
+      ),
+    ]),
+  }),
+);
+const toolText = toolWalk.text.join(' ');
+const toolTips = toolWalk.tips;
+expect(/read\s*\(\s*file_path=a\.js\s*\)/.test(toolText), 'tool row lost the name/summary: ' + toolText.slice(-240));
+expect(/pwsh\s*\(\s*command=git nope\s*\)/.test(toolText), 'second tool row lost its summary');
+expect(/成功|\\bok\\b/.test(toolText), 'ok badge missing');
+expect(/21ms/.test(toolText), 'ok badge lost the round-trip time');
+expect(/失败|\\berror\\b/.test(toolText), 'error badge missing');
+expect(/1\.3s/.test(toolText), 'error badge lost the round-trip time');
+expect(/未返回|\bno result\b/.test(toolText), 'missing-result badge missing');
+expect(/\b3 calls\b/.test(toolText), 'tool_calls header did not report its call count');
+expect(/\b1 calls\b/.test(toolText), 'empty tool_calls array did not render its own count');
+expect(toolWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-toolbadge')).length === 4, 'expected 4 tool badges (3 detail rows + 1 fallback)');
+/* A row's `title` is the raw arguments, so hovering shows them without a click;
+   the badge carries the "click to expand" hint. */
+expect(
+  toolTips.some((tip) => tip.includes('file_path')) || toolText.includes('file_path=a.js'),
+  'argument summary/tooltip missing on a tool row',
+);
+expect((toolTips.filter((tip) => /点击展开|click to expand/i.test(tip)) || []).length === 4, 'badge hint tooltip missing');
+
+/* The fallback path: an entry with no detail at all still renders as `missing`
+   from the entry's own function block (a request can carry calls this window
+   has no records for, e.g. before the loaded history begins). */
+const orphanWalk = walkAll(
+  DialogBody({
+    payload: payload([
+      makeToolCall({}, [{ id: 'ghost', type: 'function', function: { name: 'edit', arguments: '{"path":"b.js"}' } }]),
+    ]),
+  }),
+);
+const orphanText = orphanWalk.text.join(' ');
+expect(/edit\s*\(/.test(orphanText), 'orphan tool call did not fall back to the entry name: ' + orphanText.slice(-200));
+expect(/未返回|\bno result\b/.test(orphanText), 'orphan tool call did not say its result is missing');
+expect(
+  orphanWalk.tips.some((tip) => tip.includes('b.js')) || orphanText.includes('b.js'),
+  'orphan row lost the raw arguments: ' + JSON.stringify(orphanText.slice(-200)),
+);
+
+/* A `tool_calls` array with no detail map at all must still render, not throw. */
+const bareToolCall = makeCall(1, 5, 4, 100);
+bareToolCall.request.messages.push({
+  role: 'assistant', content: null,
+  tool_calls: [{ id: 'x', type: 'function', function: { name: 'read', arguments: '{}' } }],
+});
+const bareWalk = walkAll(DialogBody({ payload: payload([bareToolCall]) }));
+expect(/read/.test(bareWalk.text.join(' ')), 'tool_calls without a detail map broke the JSON pane');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 12 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 13 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);
   process.exitCode = 1;
 }
+
+
+
 
 
 
