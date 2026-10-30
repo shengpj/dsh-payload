@@ -1778,17 +1778,14 @@ window.__ModuleLoader__.load({
       'background-color:var(--dsh-pl-sb-thumb-active,#2f6fed);',
       'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
-      /* Message → conversation jump: a link chip on a message row in the tree.
-         Revealed on row hover (CSS, because inline styles cannot express :hover). */
-      '.dsh-pl-jump{display:none;align-items:center;gap:3px;margin-left:8px;padding:0 6px;',
+      /* Jump-to-conversation chip: always in flow, so a row never shifts on hover. */
+      '.dsh-pl-jump{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:0 6px;',
       'height:18px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.35));',
       'border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.6));',
       'color:var(--dsw-alias-label-secondary,#5b6472);font-family:inherit;font-size:11px;',
       'line-height:16px;cursor:pointer;vertical-align:middle}',
       '.dsh-pl-jump:hover{color:var(--dsw-alias-brand-primary,#2f6fed);',
       'border-color:var(--dsw-alias-brand-primary,#2f6fed)}',
-      '.dsh-pl-jump:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
-      '.dsh-pl-msg:hover > .dsh-pl-jump,.dsh-pl-msg:hover .dsh-pl-jump{display:inline-flex}',
     ].join('');
 
     /** Install the trigger stylesheet once; failure only costs cosmetics. */
@@ -2009,35 +2006,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The "→ 对话" chip on one message row. It is a link, not a control: it
-     * closes the dialog and scrolls the conversation to the row this message was
-     * rendered as. `props.jump` is `{ key, turn }` (see `messageLinkOf`); the
-     * row's own click (expand/collapse) must not fire, so the handler stops
-     * propagation.
-     */
-    function renderJump(props, pal) {
-      const jump = props.jump;
-      if (!jump || !jump.key) return null;
-      return h(
-        'button',
-        {
-          key: 'jump',
-          type: 'button',
-          className: 'dsh-pl-jump',
-          style: STYLE.jsonJump,
-          title: TEXT.jumpTitle,
-          'aria-label': TEXT.jumpTitle,
-          onClick: (event) => {
-            if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
-            const handler = props.onJump;
-            if (typeof handler === 'function') handler(jump);
-          },
-        },
-        TEXT.jump + ' ↗',
-      );
-    }
-
-    /**
      * A collapsible JSON node. Children are only created while the node is
      * open, which is what keeps a 500-message `messages` array cheap: the array
      * renders one collapsed line per message, not the whole tree.
@@ -2109,7 +2077,6 @@ window.__ModuleLoader__.load({
           id: focusId,
           style: Object.assign({}, STYLE.jsonLine, STYLE.jsonClickable, indentation, props.focus === true ? focusBand : null),
           onClick: () => setOpen(!open),
-          className: props.jump ? 'dsh-pl-msg' : undefined,
         },
         h('span', { key: 't', style: { display: 'inline-block', width: '14px', color: pal.toggle, fontWeight: 700 } }, open ? '▾' : '▸'),
         label,
@@ -2134,7 +2101,21 @@ window.__ModuleLoader__.load({
           ? h('span', { key: 'his', style: Object.assign({}, STYLE.jsonBadgeMuted, { color: pal.punct }) }, TEXT.history + ' ' + historyEnd)
           : null,
         props.jump && !isArray
-          ? renderJump(props, pal)
+          ? h(
+              'span',
+              {
+                key: 'jump',
+                className: 'dsh-pl-jump',
+                style: STYLE.jsonJump,
+                title: TEXT.jumpTitle,
+                onClick: (event) => {
+                  if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+                  const handler = props.onJump;
+                  if (typeof handler === 'function') handler(props.jump);
+                },
+              },
+              TEXT.jump + ' ↗',
+            )
           : null,
         open ? null : h('span', { key: 'e', style: { color: pal.punct } }, isArray ? ']' : '}'),
       );
