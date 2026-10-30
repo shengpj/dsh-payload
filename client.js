@@ -1469,11 +1469,11 @@ window.__ModuleLoader__.load({
       '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
-      /* The timeline’s "heaviest" pills are navigation, not list rows: they reuse
-         the hover rules but must not be counted as step-list rows. */
-      '.dsh-pl-heavy{border-radius:999px}',
-      '.dsh-pl-heavy:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
-      '.dsh-pl-heavy:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      /* The source legend's family chips are navigation pills, not list rows:
+         they borrow the hover rules but must not be counted as step-list rows. */
+      '.dsh-pl-pill{border-radius:999px}',
+      '.dsh-pl-pill:not(.dsh-pl-pill-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
+      '.dsh-pl-pill:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
          is thin and fades out, which makes dragging to the end a guessing game.
          Colours come from the dialog’s own palette through custom properties (see
@@ -2118,7 +2118,7 @@ window.__ModuleLoader__.load({
           {
             key: key,
             type: 'button',
-            className: 'dsh-pl-heavy' + (open ? ' dsh-pl-step-on' : ''),
+            className: 'dsh-pl-pill' + (open ? ' dsh-pl-pill-on' : ''),
             style: STYLE.sourceChip,
             title: title || undefined,
             'aria-expanded': open ? 'true' : 'false',
