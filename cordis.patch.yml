@@ -1,0 +1,3 @@
+- insert:
+    - id: payload
+      name: 'dsh-payload'

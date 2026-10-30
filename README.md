@@ -1,0 +1,121 @@
+# dsh-payload
+
+在 DeepSeek Harness（DSH）Web GUI 里，查看**每一次模型调用真实发出的完整请求**。
+
+每条 assistant 回复下方的操作行里（和「复制」「好的回答」同一排）多一个 `{ }` 图标按钮，鼠标移上去浮出「查看请求 JSON」，点开是一个弹框，显示**产生这条回复的那一次调用**实际发给模型的 `model`、调用参数、`messages` 和 `tools`，以及这次调用的 token 拆解。
+
+![弹框：左侧 step 列表选择第几次调用，右侧是那次调用实际发出的请求 JSON](docs/screenshot-dialog.png)
+
+截图来自一次**单轮 21 次模型调用**的真实会话：左侧逐行给出 `#k`、该次 token 和 `step n · m 条消息`（第 21 次是 1481 条消息、4.5 MB 请求体），右侧是选中那次的请求 JSON，`role: "tool"` 的那条就是某次工具结果被原样回传给模型的样子。
+
+## 功能
+
+- **精确到某一条回复**：每条 assistant 消息的按钮都指向产生它的那次调用，而不是「这一轮的最后一次」。
+- **按调用分组**：一个 step 就是一次调用，一次调用一份快照。调用次数不多时用 `#1 #2 #3…` 标签页切换；超过 12 次自动换成**左侧 step 列表**（每行仍带 `#k`、token、`step n · m 条消息`），右侧 JSON 占满剩余宽度。
+- **可折叠 JSON**：对象/数组默认折叠、标量直接展示，每个节点都能单独展开或收起，另有「全部展开 / 全部收起」；长字符串截断显示，复制时仍是原值。
+- **token 用量**：顶部三层信息，第二行是调用元信息（`#k/N`、model、消息条数、工具数、触发原因），第三行是 token 拆解（输入 / 缓存与命中率 / 输出 / 合计 / 本轮合计），全部来自 provider 上报的真实数值。
+- **复制**：复制当前那次调用，或「复制全部调用」导出成请求数组。
+- `Esc` 或点击遮罩关闭；标签页/step 列表支持鼠标与 ↑/↓/Home/End。
+
+## 安装
+
+插件是一个 Cordis bundle（`cordis.patch.yml` + 一个纯客户端 `client.js`），装进 DSH profile 后刷新 Web GUI 即可。
+
+**从 GitHub 安装**（让 DSH 里的 agent 执行，或自己调 `plugin_manager` 的 `install_bundle`）：
+
+```
+git+https://github.com/shengpj/dsh-payload.git#<commit>
+```
+
+`<commit>` 用 40 位 SHA：`git ls-remote https://github.com/shengpj/dsh-payload.git refs/heads/main` 取当前值。
+
+**从本地目录安装**（改代码时更方便，`link:` 不需要重装）：
+
+```
+git clone https://github.com/shengpj/dsh-payload.git
+# 然后用 link:<绝对路径> 安装这个目录
+```
+
+装好后在 profile 的 bundles 列表里能看到 `dsh-payload`，刷新页面，回复下方就出现图标。
+
+## 使用
+
+1. 找到某条 assistant 回复，把鼠标移到操作行的 `{ }` 上，气泡显示「查看请求 JSON」。
+2. 点击，弹框打开并**直接停在产生这条回复的那次调用**上。
+3. 若这条回复所在的 Turn 调用了很多次，用标签页或左侧列表切换，看每一次各自发了什么。
+4. 「复制」拿走当前这份请求，「复制全部调用」拿走整轮所有请求组成的数组。
+
+## 数据来源
+
+不重发请求、不新增服务端接口，完全离线重建：数据全部来自 Client 已经持有的会话日志。
+
+| 需要的字段 | 日志来源 |
+| --- | --- |
+| 调用边界（每次调用一条） | `step/start` + `step/end` 的 `{turn, step}` |
+| `model`、`provider` | 该 step 的 `assistant/message.data.message.source`（响应里回写的真实来源），缺失时退回 `request/header` 的 `header.config` |
+| temperature / maxTokens 等调用参数 | `request/header` 的 `header.config`（EpochHeader / LlmCallConfig），稀疏，需向前继承 |
+| `tools` | `request/header` 的 `header.tools`（ToolSchema[]），同样需向前继承 |
+| `messages` | 该 step 首个响应事件之前的所有 surface 事件：`system/message`、`developer/message`、`user/message`、`assistant/message`、`tool/result`；`tool/call` 会挂到前一条 assistant 消息的 `tool_calls` 上 |
+| token 用量 | 该 step 的 `assistant/message.data.usage`（provider 上报的真实值，不是估算） |
+
+`request/header` 只在调用配置发生变化时才写一条（`reason` 为 `initial` / `change` / `resume` / `series`），不是每次调用都有——所以分组锚点用 `step/start`，配置从不超过该 step 的最近一条 header 继承。
+
+## token 口径
+
+`assistant/message.data.usage` 的字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `inputTokens` | 本次实际发出的 prompt tokens 中**未命中缓存**的部分 |
+| `cacheReadTokens` | 命中 prompt cache 的 tokens |
+| `outputTokens` | 模型生成的 tokens |
+| `totalTokens` | provider 的合计，等于 `inputTokens + cacheReadTokens + outputTokens` |
+
+命中率按 `cacheReadTokens / (inputTokens + cacheReadTokens)` 计算。标签页/step 行上是紧凑值（`12.4k`），弹框头部是该次调用的精确拆解，多调用时另给「本轮合计」。
+
+三个容易混的量：
+
+| 指标 | 真实含义 |
+| --- | --- |
+| 「输入」chip | **未命中前缀缓存**的 prompt tokens，只是 prompt 的一部分，**不是 JSON 大小** |
+| 「缓存」chip | 命中 prompt cache 的部分；输入 + 缓存才是完整 prompt |
+| 「N 条消息」「请求体 X MB」 | 这次请求携带的历史条数与重建 JSON 的字节数；字节 ≠ token（中文约 1 token ≈ 1–2 字节） |
+
+实测差异：某次调用 `input 1009 / cache 80,640 / output 1,425 / total 83,074`，而日志重建出 1078 条消息、3.70 MB、约 754 k tokens——provider 只按 81,649 prompt tokens 计费，差 9.2 倍。原因是请求发出前会先经**上下文压缩**把旧区间折叠成摘要，日志保留原文、模型只读摘要，所以条数与字节远大于计费 tokens。因此 token 一律以 `assistant/message.data.usage` 为准，条数/字节只作「这份快照有多大」的参考；每个 chip 都挂了 `title` 说明，日志条数超过 200 时弹框底部另补一行同样口径的提示。
+
+## 限制
+
+- 只支持 DSH **Web GUI**（纯客户端插件，没有 Host 半边的服务注册）；在 TUI/CLI 下没有入口。
+- 首次打开某个 Turn 时需要把会话窗口往前翻完（`loadOlder()`），几十次调用、上万条事件的大会话里会有可观的首开耗时；同一 Turn 的结果会缓存，再开很快。
+- provider 没上报 `usage` 的调用会显示「未记录到用量」，其余部分照常展示。
+- 已定稿的 assistant 消息才有操作行，正在流式输出的那条没有。
+
+在 DSH `0.2.1-rc.3`（Web GUI）上开发并验证。
+
+## 开发
+
+```
+index.js                     Host 半边（空 apply，只为让 bundle 有个 host 入口）
+client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
+cordis.patch.yml             装进 profile 时插入的条目
+tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射
+tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 7 个场景
+tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
+tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
+docs/notes.md                      实现细节与踩坑记录
+```
+
+验证（Node 18+，不需要浏览器）：
+
+```bash
+node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
+node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
+node tools/render-smoke.cjs                       # 渲染：7 个场景
+node tools/audit-keys.cjs                         # 静态：死键必须为 0
+```
+
+数据管线的核心是五步：定位消息所属 Turn → 翻完窗口 → 逐个 `step/start` 切分 → 每个切点折叠出 `messages` 并继承最近一条 `request/header` → 按 `meta.step` 选中目标调用。踩过的坑（slot 组件里不能用注入式 hook、`request/header` 稀疏、空 `content: []` 是增量标记、`listTokens` 不是全量 token 表等）都记在 [docs/notes.md](docs/notes.md)。
+
+## License
+
+MIT
