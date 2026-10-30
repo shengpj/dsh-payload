@@ -29,6 +29,16 @@
 5. 用 `meta.step === step` 选中那一次调用（弹框直接停在这条回复对应的调用上）
 6. 结果缓存在模块级 Map，键是 `sessionId + turn + 窗口末端 seq`——带上窗口长度，Turn 还在增长时不会命中过期结果；Map 超过 40 条整体清空
 
+## 首开耗时：一次折叠，而不是每步重扫
+
+第一版每个切点都调一次 `buildMessages(events, cutSeq, …)`，每次都从窗口第一个事件重新折叠到该切点，于是 169 次调用的 Turn 变成了 169 次全量回放，Node 里 11.4 s。现在：
+
+- `FoldState` 顺序把事件吃进「已折叠消息」和每条消息的 `items[]`（同一条消息的事件组），`snapshotAt(cutSeq)` 只让游标前进到切点，然后返回 `messages.slice(0, n)` 加一份长度记录。第 k 步的数组是上一份的前缀，**引用共享**——所以 `diffRequests` 的公共前缀可以用 `===` 判断完，不必逐条 stringify。
+- 来源分类（`summarizeSources`）同理改成前缀累加：`newSourceAcc` / `foldSourceInto` / `snapshotSourceAcc`，整轮一份、本轮再从 `historyEnd` 起一份。
+- `diffRequests` 里 `messages` 之外的字段（model、采样参数、`tools`）先比引用：同一 Turn 内 `tools` 是同一个数组，直接相等就跳过 stringify。
+- 真实会话实测（Node）：Turn 3（61 次调用）11 ms、Turn 55（120 次）57 ms、Turn 71（169 次）101 ms、Turn 76（111 次）83 ms；整份日志的 `JSON.parse` 约 583 ms 是 `loadOlder()` 那一步的一次性成本，与调用次数无关。
+
+
 ## 分组的几个细节
 
 - 切点是该 step 的**首个响应事件**，不是 `step/start`：本轮的运行时上下文注入（`Time sampled while preparing turn N, step M…` 这类 `user/message`）是在 `step/start` **之后**才写进日志的，用 `step/start` 当切点会把它们漏掉，`messages` 甚至可能为空。
