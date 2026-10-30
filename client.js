@@ -73,6 +73,8 @@ window.__ModuleLoader__.load({
           reasonLabel: '触发原因',
           expandAll: '展开全部',
           collapseAll: '折叠全部',
+          expand: '展开这一条',
+          collapse: '折叠这一条',
           toTop: '顶部',
           toEnd: '末尾',
           railTitle: '拖动滚动条可直达任意位置',
@@ -106,6 +108,7 @@ window.__ModuleLoader__.load({
           diffSame: '与上一次调用完全相同',
           diffFirst: '本轮第一次调用，没有可比较的上一次',
           diffPrevTitle: '上一次调用',
+          diffTools: '个工具',
           timelineTitle: '本轮各步',
           timelineHint: '每段是一步，宽度按该步消耗的 token；点一段切到那次调用',
           timelineSelected: '当前',
@@ -157,6 +160,8 @@ window.__ModuleLoader__.load({
           reasonLabel: 'reason',
           expandAll: 'Expand all',
           collapseAll: 'Collapse all',
+          expand: 'Expand this message',
+          collapse: 'Collapse this message',
           toTop: 'Top',
           toEnd: 'End',
           railTitle: 'Drag the rail to jump anywhere in the payload',
@@ -190,6 +195,7 @@ window.__ModuleLoader__.load({
           diffSame: 'identical to the previous call',
           diffFirst: 'first call of this Turn — nothing to compare',
           diffPrevTitle: 'previous call',
+          diffTools: 'tools',
           timelineTitle: 'This Turn’s steps',
           timelineHint: 'One segment per step, width by the tokens it spent; click to switch',
           timelineSelected: 'selected',
@@ -357,17 +363,41 @@ window.__ModuleLoader__.load({
         display: 'flex',
         flexDirection: 'column',
         gap: '2px',
-        maxHeight: '132px',
+        /* ~40vh: a 29-step Turn adds nearly 60 rows, and a 132px window showed
+           six of them. The panel is inside a scrollable dialog body, so growing
+           past this only means one more scroll region unless we cap it here. */
+        maxHeight: '40vh',
         overflowY: 'auto',
       },
       diffRow: {
         display: 'flex',
-        alignItems: 'baseline',
-        gap: '8px',
+        flexDirection: 'column',
+        gap: '2px',
         fontSize: '12px',
         lineHeight: '18px',
         padding: '1px 4px',
         borderRadius: '4px',
+      },
+      diffRowTop: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: '8px',
+      },
+      diffToggle: {
+        flex: '0 0 auto',
+        minWidth: '14px',
+        padding: '0',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+        cursor: 'pointer',
+        fontSize: '10px',
+        lineHeight: '16px',
+      },
+      diffOpen: {
+        marginLeft: '22px',
+        paddingLeft: '8px',
+        borderLeft: '2px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
       },
       diffRole: {
         flex: '0 0 auto',
@@ -381,11 +411,17 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
         fontVariantNumeric: 'tabular-nums',
       },
-      diffHeadText: {
+      /* The summary line wraps to at most two lines instead of ellipsing to one:
+         "pwsh · cd E:\…" is short, but a "tool" result can be a sentence and the
+         difference between a success and an error is the tail. */
+      diffSummary: {
         flex: '1 1 auto',
+        minWidth: '0',
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
         overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
+        wordBreak: 'break-word',
       },
 
       /* ---- timeline: one bar per step, proportional to the tokens it spent ---- */
@@ -1290,7 +1326,7 @@ window.__ModuleLoader__.load({
 
       const added = [];
       for (let i = common; i < after.length; i += 1) {
-        added.push({ index: i, role: after[i].role, head: headOf(after[i]) });
+        added.push({ index: i, role: after[i].role, head: headOf(after[i]), message: after[i] });
       }
 
       /* Anything the previous request had that this one does not, or that sits
@@ -1329,20 +1365,145 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** First line of a message's text, for the "what got appended" list. */
-    function headOf(message) {
+    /* ------------------------------------------------------------------
+     * Diff row summaries.
+     *
+     * Flattening `content` and taking its first 96 characters produced rows that
+     * all began with the same envelope:
+     *
+     *   {"type":"tool-call","id":"call_00_avGlXSgIoblMAYhTaOC52649","name":"pwsh","arguments":"{\"comman…
+     *
+     * 56 characters of boilerplate, then the useful part cut off. These helpers
+     * pull out what the row is actually about: which tools were called and with
+     * what arguments, what a tool result said, or the user's own words.
+     * ------------------------------------------------------------------ */
+
+    /** Text of a message's content, whether it is a string or content blocks. */
+    function messageText(message) {
       let text = message && message.content;
       if (Array.isArray(text)) {
         const parts = [];
         for (let i = 0; i < text.length; i += 1) {
           const part = text[i];
-          if (part && typeof part.text === 'string') parts.push(part.text);
+          if (!part || typeof part !== 'object') continue;
+          if (typeof part.text === 'string') parts.push(part.text);
+          else if (part.type === 'tool-call' && part.name) parts.push(part.name);
+          else if (typeof part.type === 'string') parts.push('[' + part.type + ']');
         }
         text = parts.join(' ');
       }
       if (typeof text !== 'string') text = '';
-      const flat = text.replace(/\s+/g, ' ').trim();
-      return flat.length > 96 ? flat.slice(0, 96) + '…' : flat;
+      return text.replace(/\s+/g, ' ').trim();
+    }
+
+    /** `{"command":"git status","description":"…"}` -> `git status`. */
+    function argumentHint(raw) {
+      let parsed = raw;
+      if (typeof raw === 'string') {
+        try { parsed = JSON.parse(raw); } catch (error) { parsed = null; }
+      }
+      if (!parsed || typeof parsed !== 'object') return '';
+      const order = [
+        'command', 'file_path', 'path', 'pattern', 'query', 'glob', 'url',
+        'description', 'prompt', 'name', 'action', 'session_id', 'target',
+      ];
+      for (let i = 0; i < order.length; i += 1) {
+        const value = parsed[order[i]];
+        if (typeof value === 'string' && value.trim()) {
+          const flat = value.replace(/\s+/g, ' ').trim();
+          return flat.length > 70 ? flat.slice(0, 70) + '…' : flat;
+        }
+      }
+      /* None of the well-known keys: fall back to the first non-empty string. */
+      const keys = Object.keys(parsed);
+      for (let i = 0; i < keys.length; i += 1) {
+        const value = parsed[keys[i]];
+        if (typeof value === 'string' && value.trim()) {
+          const flat = value.replace(/\s+/g, ' ').trim();
+          return flat.length > 70 ? flat.slice(0, 70) + '…' : flat;
+        }
+      }
+      return '';
+    }
+
+    /** A message's `tool_calls`, from either the OpenAI shape or content blocks. */
+    function toolCallsOf(message) {
+      const calls = [];
+      const seen = new Set();
+      const push = (name, args) => {
+        /* Both representations carry the same call (the content block is a copy
+           of the structured one), so dedupe — otherwise "1 tool call" reads as 2. */
+        const key = String(name || '?') + '\u0000' + stableJSON(args);
+        if (seen.has(key)) return;
+        seen.add(key);
+        calls.push({ name: name || '?', args: args });
+      };
+      const direct = message && message.tool_calls;
+      if (Array.isArray(direct)) {
+        for (let i = 0; i < direct.length; i += 1) {
+          const call = direct[i] || {};
+          const fn = call.function || call;
+          push(fn.name, fn.arguments !== undefined ? fn.arguments : fn.input);
+        }
+      }
+      const content = message && message.content;
+      if (Array.isArray(content)) {
+        for (let i = 0; i < content.length; i += 1) {
+          const part = content[i];
+          if (part && part.type === 'tool-call') {
+            push(part.name, part.arguments !== undefined ? part.arguments : part.input);
+          }
+        }
+      } else if (typeof content === 'string' && content.indexOf('"type":"tool-call"') !== -1) {
+        try {
+          const parsed = JSON.parse(content);
+          const list = Array.isArray(parsed) ? parsed : [parsed];
+          for (let i = 0; i < list.length; i += 1) {
+            const part = list[i];
+            if (part && part.type === 'tool-call') {
+              push(part.name, part.arguments !== undefined ? part.arguments : part.input);
+            }
+          }
+        } catch (error) { /* not JSON, just text that mentions tool-call */ }
+      }
+      return calls;
+    }
+
+    function clip(text, max) {
+      if (typeof text !== 'string') return '';
+      return text.length > max ? text.slice(0, max) + '…' : text;
+    }
+
+    /**
+     * One-line description of a message: "pwsh · git status", "read · client.js",
+     * "edit → updated successfully". Falls back to the flattened text.
+     */
+    function describeMessage(message) {
+      const role = message && message.role;
+      const calls = toolCallsOf(message);
+      if (calls.length === 1) {
+        const args = argumentHint(calls[0].args);
+        return calls[0].name + (args ? ' · ' + args : '');
+      }
+      if (calls.length > 1) {
+        const names = calls.map((call) => call.name);
+        const unique = names.filter((name, index) => names.indexOf(name) === index);
+        const shown = unique.slice(0, 3).join(', ') + (unique.length > 3 ? '…' : '');
+        return calls.length + ' ' + TEXT.diffTools + ': ' + shown;
+      }
+      const text = messageText(message);
+      if (role === 'user') {
+        /* Drop the harness's own prompt scaffolding so the user's words lead. */
+        return clip(text.replace(/^(Time sampled while preparing|Current runtime context|The following skills).*/s, '').trim() || text, 160) || '（空）';
+      }
+      if (role === 'tool') return clip(text, 160) || '（空）';
+      if (role === 'assistant' || role === 'system' || role === 'developer') return clip(text, 160) || '（空）';
+      return clip(text, 160) || '（空）';
+    }
+
+    /** First line of a message's text, for the "what got appended" list. */
+    function headOf(message) {
+      return describeMessage(message);
     }
 
     /** Locate the assistant message an action row belongs to. */
@@ -1379,6 +1540,7 @@ window.__ModuleLoader__.load({
         byteLength: byteLength,
         locateMessage: locateMessage,
         callIndexForStep: callIndexForStep,
+        describeMessage: describeMessage,
         DialogBody: DialogBody,
         /* The boundary is declared after this hook (it needs the classes above),
            so hand out a thunk instead of touching the class early. */
@@ -1920,19 +2082,64 @@ window.__ModuleLoader__.load({
         tool: pal.famTool,
       };
 
-      const rows = added.map((entry) =>
-        h(
+      /* Each row is expandable: the summary line says what the message is, and
+         clicking it opens the message verbatim as a foldable JSON tree. Without
+         that, "the diff is incomplete" was the honest reading — a summary of a
+         4.4 MB payload cannot be complete, so the full text has to be one click
+         away rather than a 96-character ellipsis. */
+      const [openRows, setOpenRows] = React.useState({});
+      const toggleRow = (index) => {
+        setOpenRows((previous) => {
+          const next = Object.assign({}, previous);
+          if (next[index]) delete next[index];
+          else next[index] = true;
+          return next;
+        });
+      };
+
+      const rows = added.map((entry) => {
+        const open = openRows[entry.index] === true;
+        const message = entry.message;
+        return h(
           'div',
-          { key: 'add-' + entry.index, style: STYLE.diffRow, title: entry.head || undefined },
-          h('span', { key: 'i', style: STYLE.diffIndex }, '+' + entry.index),
+          { key: 'add-' + entry.index, style: STYLE.diffRow },
           h(
-            'span',
-            { key: 'r', style: Object.assign({}, STYLE.diffRole, { color: roleColour[entry.role] || pal.punct }) },
-            entry.role,
+            'div',
+            { key: 'top', style: STYLE.diffRowTop },
+            h(
+              'button',
+              {
+                key: 'toggle',
+                type: 'button',
+                className: 'dsh-pl-btn',
+                style: STYLE.diffToggle,
+                title: open ? TEXT.collapse : TEXT.expand,
+                'aria-expanded': open ? 'true' : 'false',
+                onClick: () => toggleRow(entry.index),
+              },
+              open ? '▾' : '▸',
+            ),
+            h('span', { key: 'i', style: STYLE.diffIndex }, '+' + entry.index),
+            h(
+              'span',
+              { key: 'r', style: Object.assign({}, STYLE.diffRole, { color: roleColour[entry.role] || pal.punct }) },
+              entry.role,
+            ),
+            h(
+              'span',
+              { key: 'h', style: Object.assign({}, STYLE.diffSummary, { color: pal.text }) },
+              entry.head || '—',
+            ),
           ),
-          h('span', { key: 'h', style: Object.assign({}, STYLE.diffHeadText, { color: pal.text }) }, entry.head || '—'),
-        ),
-      );
+          open && message !== undefined
+            ? h(
+                'div',
+                { key: 'open', style: STYLE.diffOpen },
+                h(JsonNode, { key: 'node', name: null, value: message, depth: 0, mode: 'default', pal: pal }),
+              )
+            : null,
+        );
+      });
 
       return h(
         'div',

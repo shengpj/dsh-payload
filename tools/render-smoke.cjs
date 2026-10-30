@@ -114,6 +114,10 @@ function render(node, sink) {
        pill or segment says when the pointer rests on it. */
     if (typeof node.props.title === 'string') sink.tips.push(node.props.title);
   }
+  /* A diff row's expand toggle: one per added message, collapsed by default. */
+  if (node.type === 'button' && node.props && node.props['aria-expanded'] !== undefined) {
+    sink.toggles.push(String(node.props['aria-expanded']));
+  }
   sink.tags.push(String(node.type));
   const siblings = node.props.children;
   const seen = new Set();
@@ -128,7 +132,7 @@ function render(node, sink) {
 }
 
 function walk(element) {
-  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [] };
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [] };
   render(element, sink);
   return sink;
 }
@@ -182,8 +186,8 @@ function makeCall(index, step, messageCount, tokens, sources) {
           : {
               prefix: messageCount - 2,
               added: [
-                { index: messageCount - 2, role: 'assistant', head: 'I will read it.' },
-                { index: messageCount - 1, role: 'tool', head: 'file contents…' },
+                { index: messageCount - 2, role: 'assistant', head: 'I will read it.', message: { role: 'assistant', content: [{ type: 'text', text: 'I will read it.' }] } },
+                { index: messageCount - 1, role: 'tool', head: 'file contents…', message: { role: 'tool', content: 'file contents…', tool_call_id: 'call_1' } },
               ],
               removed: 0,
               rewritten: false,
@@ -375,6 +379,34 @@ expect(diffedText.includes('+2'), 'expected +2 added messages, got ' + diffedTex
 expect(diffedText.includes('I will read it.'), 'appended assistant head missing');
 expect(diffedText.includes('file contents'), 'appended tool head missing');
 expect(!/消失|gone/.test(diffedText), 'removed chip should not appear when nothing was removed');
+
+/* Every row must carry the message itself and a ▸ toggle: the summary can only
+   ever be a summary, so the full JSON has to be one click away. */
+const diffWalk = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200)], 1) }));
+expect(diffWalk.toggles.length === 2, 'expected one expand toggle per added row, got ' + diffWalk.toggles.length);
+expect(diffWalk.toggles.every((flag) => flag === 'false'), 'rows should start collapsed');
+
+/* describeMessage must not print the JSON envelope it used to: tool calls are
+   summarised as "name · argument", and duplicates are counted once. */
+const internalsForDiff = internals;
+const callMsg = {
+  role: 'assistant',
+  content: '{"type":"tool-call","id":"call_00_abc","name":"pwsh","arguments":"{\\"command\\":\\"git status\\"}"}',
+  tool_calls: [{ id: 'call_00_abc', type: 'function', function: { name: 'pwsh', arguments: '{"command":"git status"}' } }],
+};
+const summary = internalsForDiff.describeMessage(callMsg);
+expect(summary === 'pwsh · git status', 'tool-call summary wrong: ' + JSON.stringify(summary));
+expect(!/"type":"tool-call"/.test(summary), 'summary still leaks the JSON envelope');
+const twoCalls = {
+  role: 'assistant',
+  content: null,
+  tool_calls: [
+    { id: 'a', function: { name: 'read', arguments: '{"file_path":"a.js"}' } },
+    { id: 'b', function: { name: 'grep', arguments: '{"pattern":"TODO"}' } },
+  ],
+};
+expect(/2 (个工具|tools)/.test(internalsForDiff.describeMessage(twoCalls)), 'multi-tool summary wrong');
+expect(/read, grep|read, grep,/.test(internalsForDiff.describeMessage(twoCalls)), 'multi-tool names missing');
 
 /* A rewrite must be surfaced, not silently reported as "appended". */
 const rewrittenCall = makeCall(2, 6, 9, 200);
