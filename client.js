@@ -861,23 +861,24 @@ window.__ModuleLoader__.load({
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
       /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
          is thin and fades out, which makes dragging to the end a guessing game.
-         The rail keeps a visible track, and the thumb uses label colours (not the
-         near-invisible border tint) so it reads as a scrollbar at a glance. */
+         Colours come from the dialog’s own palette through custom properties (see
+         PALETTES), so the rail can never blend into the surface it sits on. */
       '.dsh-pl-scroll{scrollbar-gutter:stable;scrollbar-width:auto;',
-      'scrollbar-color:var(--dsw-alias-label-tertiary,#81858c) var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12))}',
+      'scrollbar-color:var(--dsh-pl-sb-thumb,rgba(15,23,42,.46)) var(--dsh-pl-sb-track,rgba(15,23,42,.07))}',
       '.dsh-pl-scroll::-webkit-scrollbar{width:14px;height:14px}',
       '.dsh-pl-scroll::-webkit-scrollbar-track{',
-      'background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12))}',
+      'background:var(--dsh-pl-sb-track,rgba(15,23,42,.07));',
+      'border-left:1px solid var(--dsw-alias-border-l1,rgba(15,23,42,.14))}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb{',
-      'border:3px solid transparent;background-clip:padding-box;border-radius:8px;',
-      'background-color:var(--dsw-alias-label-tertiary,#81858c);',
+      'border:2px solid transparent;background-clip:padding-box;border-radius:8px;',
+      'background-color:var(--dsh-pl-sb-thumb,rgba(15,23,42,.46));',
       'transition:background-color .12s ease}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb:hover{',
-      'background-color:var(--dsw-alias-label-secondary,#5b6472);',
-      'border:3px solid transparent;background-clip:padding-box}',
+      'background-color:var(--dsh-pl-sb-thumb-hover,rgba(15,23,42,.68));',
+      'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb:active{',
-      'background-color:var(--dsw-alias-brand-primary,#2f6fed);',
-      'border:3px solid transparent;background-clip:padding-box}',
+      'background-color:var(--dsh-pl-sb-thumb-active,#2f6fed);',
+      'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
     ].join('');
 
@@ -914,6 +915,12 @@ window.__ModuleLoader__.load({
         nil: '#6e7781',
         punct: '#8c959f',
         toggle: '#8250df',
+        /* Scrollbar: alpha over the pane background, so contrast never depends on
+           which alias token happens to be near the surface colour. */
+        scTrack: 'rgba(15,23,42,0.07)',
+        scThumb: 'rgba(15,23,42,0.46)',
+        scThumbHover: 'rgba(15,23,42,0.68)',
+        scThumbActive: '#2f6fed',
       },
       dark: {
         key: '#d2a8ff',
@@ -923,6 +930,10 @@ window.__ModuleLoader__.load({
         nil: '#8b949e',
         punct: '#6e7681',
         toggle: '#d2a8ff',
+        scTrack: 'rgba(255,255,255,0.10)',
+        scThumb: 'rgba(255,255,255,0.42)',
+        scThumbHover: 'rgba(255,255,255,0.66)',
+        scThumbActive: '#5a8cff',
       },
     };
 
@@ -1458,9 +1469,18 @@ window.__ModuleLoader__.load({
           ? h('div', { key: 'foot', style: STYLE.dialogFoot }, TEXT.compressNote)
           : null;
 
+      /* The rail reads its colours from these custom properties, so the same
+         stylesheet serves both colour schemes without a scheme class. */
+      const dialogStyle = Object.assign({}, STYLE.dialog, {
+        '--dsh-pl-sb-track': pal.scTrack,
+        '--dsh-pl-sb-thumb': pal.scThumb,
+        '--dsh-pl-sb-thumb-hover': pal.scThumbHover,
+        '--dsh-pl-sb-thumb-active': pal.scThumbActive,
+      });
+
       return h(
         'div',
-        { style: STYLE.dialog, onClick: (event) => event.stopPropagation() },
+        { style: dialogStyle, onClick: (event) => event.stopPropagation() },
         header,
         picker,
         stepList ? h('div', { key: 'split', style: STYLE.split }, stepList, body) : body,
