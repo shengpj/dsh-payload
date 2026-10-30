@@ -21,7 +21,7 @@
 
 插件是一个 Cordis bundle（`cordis.patch.yml` + 一个纯客户端 `client.js`），装进 DSH profile 后刷新 Web GUI 即可。
 
-**从 GitHub 安装**（让 DSH 里的 agent 执行，或自己调 `plugin_manager` 的 `install_bundle`）：
+**方式一：从 GitHub 安装**（让 DSH 里的 agent 执行，或自己调 `plugin_manager` 的 `install_bundle`）：
 
 ```
 git+https://github.com/shengpj/dsh-payload.git#<commit>
@@ -29,7 +29,15 @@ git+https://github.com/shengpj/dsh-payload.git#<commit>
 
 `<commit>` 用 40 位 SHA：`git ls-remote https://github.com/shengpj/dsh-payload.git refs/heads/main` 取当前值。
 
-**从本地目录安装**（改代码时更方便，`link:` 不需要重装）：
+**方式二：走插件市场索引**。仓库里带了一份 `market/index.json`（DSH 插件市场 format 1）。启用 `plugin-market` 后把这个地址加成索引：
+
+```
+https://raw.githubusercontent.com/shengpj/dsh-payload/main/market/index.json
+```
+
+之后在 Discover 里搜 `dsh-payload` 就能一键安装——索引里的版本指向 commit-pinned 的 git 源，装到的就是仓库里对应的那一版。
+
+**方式三：本地目录**（改代码时更方便，`link:` 不需要重装）：
 
 ```
 git clone https://github.com/shengpj/dsh-payload.git
@@ -103,6 +111,7 @@ tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），�
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 docs/notes.md                      实现细节与踩坑记录
+market/index.json                  插件市场索引（format 1）
 ```
 
 验证（Node 18+，不需要浏览器）：
