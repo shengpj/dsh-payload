@@ -95,6 +95,7 @@ window.__ModuleLoader__.load({
           sourceKindToolRegistry: '工具登记',
           sourceKindModel: '模型回复',
           sourceKindTool: '工具结果',
+          sourceKindJobReport: '后台任务回报',
           sourceKindOther: '未标注来源',
           diffTitle: '相比上一次调用',
           diffAdded: '新增',
@@ -104,10 +105,17 @@ window.__ModuleLoader__.load({
           diffSame: '与上一次调用完全相同',
           diffFirst: '本轮第一次调用，没有可比较的上一次',
           diffPrevTitle: '上一次调用',
-          timelineTitle: '本轮调用时间线',
-          timelineHint: '每段是一步，宽度按该步在日志里占用的记录数',
-          timelineRecords: '条记录',
+          timelineTitle: '本轮各步',
+          timelineHint: '每段是一步，宽度按该步消耗的 token；点一段切到那次调用',
           timelineSelected: '当前',
+          timelineHeaviest: '最重',
+          timelineHeavyTitle: '按 token 排序的前几步，点击切换',
+          stepWord: 'step',
+          toolCount: '工具',
+          toolNone: '无工具',
+          roundTrips: '往返',
+          tokens: 'token',
+          noUsage: '无用量',
         }
       : {
           show: 'Request JSON',
@@ -175,6 +183,7 @@ window.__ModuleLoader__.load({
           sourceKindToolRegistry: 'tool registry',
           sourceKindModel: 'model reply',
           sourceKindTool: 'tool result',
+          sourceKindJobReport: 'job report',
           sourceKindOther: 'unlabelled',
           diffTitle: 'vs previous call',
           diffAdded: 'added',
@@ -184,10 +193,17 @@ window.__ModuleLoader__.load({
           diffSame: 'identical to the previous call',
           diffFirst: 'first call of this Turn — nothing to compare',
           diffPrevTitle: 'previous call',
-          timelineTitle: 'This Turn’s calls',
-          timelineHint: 'One segment per step, width by the records it wrote',
-          timelineRecords: 'records',
+          timelineTitle: 'This Turn’s steps',
+          timelineHint: 'One segment per step, width by the tokens it spent; click to switch',
           timelineSelected: 'selected',
+          timelineHeaviest: 'heaviest',
+          timelineHeavyTitle: 'Top steps by tokens — click to switch',
+          stepWord: 'step',
+          toolCount: 'tools',
+          toolNone: 'no tools',
+          roundTrips: 'round-trips',
+          tokens: 'tokens',
+          noUsage: 'no usage',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -380,7 +396,7 @@ window.__ModuleLoader__.load({
         whiteSpace: 'nowrap',
       },
 
-      /* ---- timeline: one bar per step, proportional to its seq span ---- */
+      /* ---- timeline: one bar per step, proportional to the tokens it spent ---- */
       timeline: {
         display: 'flex',
         flexDirection: 'column',
@@ -411,10 +427,37 @@ window.__ModuleLoader__.load({
       },
       timelineLabels: {
         display: 'flex',
-        justifyContent: 'space-between',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        gap: '6px',
+        flexWrap: 'wrap',
         fontSize: '11.5px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
         fontVariantNumeric: 'tabular-nums',
+      },
+      timelineHeavyLabel: {
+        fontWeight: '600',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      /* The heaviest steps, as compact pills: "#7 99.3k 12 工具". */
+      timelineHeavy: {
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: '5px',
+        padding: '2px 7px',
+        borderRadius: '999px',
+        border: '1px solid var(--dsw-alias-border-l1, #e3e6ea)',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      timelineHeavyNo: {
+        fontWeight: '600',
+        color: 'var(--dsw-alias-label-primary, #101828)',
+      },
+      timelineHeavyNum: {
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
 
       /* ---- source breakdown: one stacked bar, then the legend ---- */
@@ -436,7 +479,34 @@ window.__ModuleLoader__.load({
         lineHeight: '17px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
-      sourceKey: { display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' },
+      /* Each family is a chip that opens its kinds; collapsed by default so the
+         panel is one readable row above the JSON. */
+      sourceChip: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        whiteSpace: 'nowrap',
+        padding: '2px 7px',
+        borderRadius: '999px',
+        border: '1px solid var(--dsw-alias-border-l1, #e3e6ea)',
+        background: 'transparent',
+        color: 'inherit',
+        font: 'inherit',
+        cursor: 'pointer',
+        lineHeight: '17px',
+      },
+      sourceDetailRow: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '4px 12px',
+        marginTop: '6px',
+        paddingTop: '6px',
+        borderTop: '1px dashed var(--dsw-alias-border-l1, #e3e6ea)',
+        fontSize: '11.5px',
+        lineHeight: '17px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      sourceDetail: { display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' },
       sourceDot: { width: '8px', height: '8px', borderRadius: '2px', flex: '0 0 auto' },
       sourceNum: {
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
@@ -666,6 +736,11 @@ window.__ModuleLoader__.load({
     const SOURCE_KINDS = {
       user: { key: 'prompt', family: 'prompt' },
       'user-approval': { key: 'approval', family: 'prompt' },
+      /* Background-job completion reports arrive as `user` messages, but they are
+         the harness talking, not the person: counting them as "your input" made
+         a Turn with 1 real prompt report 54. Kept in their own kind so both the
+         count and the wording stay honest. */
+      'tool-jobs': { key: 'jobReport', family: 'injected' },
       'time-context': { key: 'timeContext', family: 'injected' },
       'runtime-context': { key: 'runtimeContext', family: 'injected' },
       'skill-catalog': { key: 'skillCatalog', family: 'injected' },
@@ -1066,16 +1141,32 @@ window.__ModuleLoader__.load({
         responseByStep[key] = entry;
       }
 
-      /* Tool records belong to a step too, and they are what makes a step long
-         in wall-clock terms, so extend each entry over them. */
+      /* Tool traffic belongs to a step too, and it is the honest measure of how
+         heavy a step was: one call plus its result is one round-trip. Counted
+         here so the timeline can size and label each step without re-scanning. */
+      const toolsByStep = {};
       for (let i = 0; i < events.length; i += 1) {
         const event = events[i];
         const type = typeOf(event);
         if (type !== 'tool/call' && type !== 'tool/result') continue;
         const data = dataOf(event);
         if (turnNumber !== undefined && data.turn !== turnNumber) continue;
-        const entry = responseByStep[String(data.step)];
-        if (entry) entry.endSeq = Math.max(entry.endSeq || 0, seqOf(event));
+        const key = String(data.step);
+        const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [] });
+        if (type === 'tool/call') {
+          entry.calls += 1;
+          const response = responseByStep[key];
+          if (response) response.endSeq = Math.max(response.endSeq || 0, seqOf(event));
+          if (typeof data.name === 'string' && entry.names.indexOf(data.name) < 0) entry.names.push(data.name);
+        } else {
+          entry.results += 1;
+        }
+      }
+      /* A step without tool traffic still needs an entry, so the timeline can
+         say "0 工具" instead of treating it as missing data. */
+      for (let i = 0; i < steps.length; i += 1) {
+        const key = String(steps[i].step);
+        if (!toolsByStep[key]) toolsByStep[key] = { calls: 0, results: 0, names: [] };
       }
 
       const calls = [];
@@ -1144,9 +1235,9 @@ window.__ModuleLoader__.load({
             turn: turnNumber,
             seq: cutSeq,
             step: stepInfo.step,
-            /* The seqs that frame this step in the log, so the timeline can size
-               it without re-scanning: startSeq is where it opened, endSeq is the
-               last record it wrote (response, tool calls, tool results). */
+            /* The seqs that frame this step in the log. startSeq is where it
+               opened, endSeq is the last record it wrote; kept only so the
+               timeline can describe a step's extent, never as a measure of cost. */
             startSeq: stepInfo.seq,
             endSeq: response && typeof response.endSeq === 'number' ? response.endSeq : stepInfo.seq,
             reason: header ? header.reason : null,
@@ -1154,6 +1245,11 @@ window.__ModuleLoader__.load({
             model: model,
             provider: provider,
             messages: request.messages.length,
+            /* How heavy this step was: tool calls, tool round-trips (a call with
+               its result) and the distinct tool names it used. */
+            toolCalls: toolsByStep[String(stepInfo.step)].calls,
+            toolResults: toolsByStep[String(stepInfo.step)].results,
+            toolNames: toolsByStep[String(stepInfo.step)].names,
             /* Index where this Turn's own messages start; the viewer folds
                everything before it. Kept on `meta`, never inside `request`, so
                the payload itself stays byte-for-byte what was sent. */
@@ -1410,6 +1506,11 @@ window.__ModuleLoader__.load({
       '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
+      /* The timeline’s "heaviest" pills are navigation, not list rows: they reuse
+         the hover rules but must not be counted as step-list rows. */
+      '.dsh-pl-heavy{border-radius:999px}',
+      '.dsh-pl-heavy:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
+      '.dsh-pl-heavy:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
          is thin and fades out, which makes dragging to the end a guessing game.
          Colours come from the dialog’s own palette through custom properties (see
@@ -1881,13 +1982,16 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The whole Turn at a glance: one segment per model call, sized by how many
-     * log records that step wrote (its request/response plus any tool round-trip).
+     * The whole Turn at a glance: one segment per model call.
      *
-     * Records rather than milliseconds, because the session log records order and
-     * content but not timestamps — inventing a clock here would be a nicer-looking
-     * lie. Clicking a segment jumps to that call, which is the reason the timeline
-     * earns its space next to the tab strip.
+     * Sized by the tokens that call consumed (input + cache + output), which is
+     * the only per-step cost the log records and the provider actually reports —
+     * the log has no timestamps, and record counts barely move between a plain
+     * reply and a tool round-trip. Under the bar each step states what it did:
+     * how many tools it called, how many round-trips that took, and its tokens.
+     *
+     * Clicking a segment selects that call, so the strip doubles as navigation
+     * for a Turn too long for tabs.
      */
     function Timeline(props) {
       const calls = Array.isArray(props.calls) ? props.calls : [];
@@ -1895,41 +1999,66 @@ window.__ModuleLoader__.load({
       const pal = props.pal || PALETTES.light;
       if (calls.length < 2) return null;
 
-      const spans = calls.map((item) => {
-        const meta = item.meta || {};
-        const start = typeof meta.startSeq === 'number' ? meta.startSeq : 0;
-        const end = typeof meta.endSeq === 'number' ? meta.endSeq : start;
-        return Math.max(1, end - start + 1);
+      const weights = calls.map((item) => {
+        const usage = item.meta && item.meta.usage;
+        const total = usage && typeof usage.total === 'number' ? usage.total : 0;
+        return total > 0 ? total : 1;
       });
-      const total = spans.reduce((acc, value) => acc + value, 0);
+      const totalTokens = weights.reduce((acc, value) => acc + (value > 1 ? value : 0), 0);
 
       const segments = calls.map((item, position) => {
         const meta = item.meta || {};
         const chosen = position === props.selected;
+        const toolCalls = typeof meta.toolCalls === 'number' ? meta.toolCalls : 0;
+        const toolResults = typeof meta.toolResults === 'number' ? meta.toolResults : 0;
+        const roundTrips = Math.min(toolCalls, toolResults);
+        const usage = meta.usage || null;
+        const parts = ['#' + (item.index || position + 1)];
+        if (meta.step !== undefined) parts.push(TEXT.stepWord + ' ' + meta.step);
+        parts.push(toolCalls ? toolCalls + ' ' + TEXT.toolCount : TEXT.toolNone);
+        if (roundTrips) parts.push(roundTrips + ' ' + TEXT.roundTrips);
+        parts.push(usage && usage.total ? formatTokens(usage.total) + ' ' + TEXT.tokens : TEXT.noUsage);
+        if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
+        if (chosen) parts.push(TEXT.timelineSelected);
+
         return h('button', {
           key: 'seg-' + position,
           type: 'button',
           style: Object.assign({}, STYLE.timelineSeg, {
-            flex: String(spans[position]) + ' 1 0',
+            flex: String(weights[position]) + ' 1 0',
             background: chosen ? pal.famPrompt : pal.punct,
             opacity: chosen ? 1 : 0.55,
           }),
-          title:
-            '#' +
-            (item.index || position + 1) +
-            ' · step ' +
-            (meta.step === undefined ? position + 1 : meta.step) +
-            ' · ' +
-            spans[position] +
-            ' ' +
-            TEXT.timelineRecords +
-            ' · ' +
-            (meta.messages === undefined ? '?' : meta.messages) +
-            ' ' +
-            TEXT.messages +
-            (chosen ? ' · ' + TEXT.timelineSelected : ''),
+          title: parts.join(' · '),
           onClick: onSelect ? () => onSelect(position) : undefined,
         });
+      });
+
+      /* Below the bar, the steps that did the most work — reading a 20-step strip
+         segment by segment is not how anyone finds the expensive step. */
+      const ranked = calls
+        .map((item, position) => ({ item: item, position: position, usage: (item.meta && item.meta.usage) || null }))
+        .filter((entry) => entry.usage && entry.usage.total > 0)
+        .sort((a, b) => b.usage.total - a.usage.total)
+        .slice(0, 3);
+
+      const heaviest = ranked.map((entry) => {
+        const meta = entry.item.meta || {};
+        const toolCalls = typeof meta.toolCalls === 'number' ? meta.toolCalls : 0;
+        return h(
+          'button',
+          {
+            key: 'heavy-' + entry.position,
+            type: 'button',
+            className: 'dsh-pl-heavy' + (entry.position === props.selected ? ' dsh-pl-step-on' : ''),
+            style: STYLE.timelineHeavy,
+            title: TEXT.timelineHeavyTitle,
+            onClick: onSelect ? () => onSelect(entry.position) : undefined,
+          },
+          h('span', { key: 'n', style: STYLE.timelineHeavyNo }, '#' + (entry.item.index || entry.position + 1)),
+          h('span', { key: 't', style: STYLE.timelineHeavyNum }, formatTokens(entry.usage.total)),
+          toolCalls ? h('span', { key: 'c', style: STYLE.sourceMuted }, toolCalls + ' ' + TEXT.toolCount) : null,
+        );
       });
 
       return h(
@@ -1942,13 +2071,15 @@ window.__ModuleLoader__.load({
           h('span', { key: 'n', style: STYLE.sourceMuted }, calls.length + ' ' + TEXT.callsShort),
         ),
         h('div', { key: 'track', style: STYLE.timelineTrack, title: TEXT.timelineHint }, segments),
-        h(
-          'div',
-          { key: 'labels', style: STYLE.timelineLabels },
-          h('span', { key: 'a' }, '#1'),
-          h('span', { key: 'b' }, total + ' ' + TEXT.timelineRecords),
-          h('span', { key: 'c' }, '#' + calls.length),
-        ),
+        heaviest.length
+          ? h(
+              'div',
+              { key: 'heavy', style: STYLE.timelineLabels },
+              h('span', { key: 'l', style: STYLE.timelineHeavyLabel }, TEXT.timelineHeaviest),
+              heaviest,
+              h('span', { key: 'r', style: Object.assign({}, STYLE.sourceMuted, { marginLeft: 'auto' }) }, formatTokens(totalTokens)),
+            )
+          : null,
       );
     }
 
@@ -2006,6 +2137,7 @@ window.__ModuleLoader__.load({
         modelSelection: TEXT.sourceKindModelSelection,
         systemPrompt: TEXT.sourceKindSystemPrompt,
         toolRegistry: TEXT.sourceKindToolRegistry,
+        jobReport: TEXT.sourceKindJobReport,
         model: TEXT.sourceKindModel,
         tool: TEXT.sourceKindTool,
         other: TEXT.sourceKindOther,
@@ -2025,28 +2157,60 @@ window.__ModuleLoader__.load({
           }),
         );
 
-      const legend = order
-        .filter((key) => sources.counts[key] > 0)
-        .map((key) => {
-          /* One family's exact kinds, so "自动注入 50" can be read down to
-             "时间上下文 33 · 运行时上下文 7". */
-          const members = (sources.kinds || [])
-            .filter((item) => item.family === key)
-            .map((item) => kindText[item.key] || kindText.other)
-            .join(' · ');
-          return h(
+      /* Collapsed by default: a five-family legend with every kind spelled out was
+         five lines of text above the JSON, answering a question most visits do not
+         ask. The compact row states the families; the kinds appear on demand. */
+      const [openFamily, setOpenFamily] = React.useState('');
+
+      const families = order.filter((key) => sources.counts[key] > 0);
+
+      const chips = families.map((key) => {
+        const members = (sources.kinds || [])
+          .filter((item) => item.family === key)
+          .map((item) => ({
+            text: kindText[item.key] || kindText.other,
+            count: item.count,
+          }));
+        const open = openFamily === key;
+        const title = members.map((item) => item.text + ' ' + item.count).join(' · ');
+        return h(
+          'button',
+          {
+            key: key,
+            type: 'button',
+            className: 'dsh-pl-heavy' + (open ? ' dsh-pl-step-on' : ''),
+            style: STYLE.sourceChip,
+            title: title || undefined,
+            'aria-expanded': open ? 'true' : 'false',
+            onClick: () => setOpenFamily(open ? '' : key),
+          },
+          h('span', { key: 'd', style: Object.assign({}, STYLE.sourceDot, { background: colour[key] }) }),
+          h('span', { key: 'l' }, label[key]),
+          h('span', { key: 'n', style: STYLE.sourceNum }, formatExact(sources.counts[key])),
+          h(
             'span',
-            {
-              key: key,
-              style: STYLE.sourceKey,
-              title: sources.counts[key] + ' ' + label[key] + (members ? ' — ' + members : ''),
-            },
-            h('span', { key: 'd', style: Object.assign({}, STYLE.sourceDot, { background: colour[key] }) }),
-            h('span', { key: 'l' }, label[key]),
-            h('span', { key: 'n', style: STYLE.sourceNum }, formatExact(sources.counts[key])),
-            members ? h('span', { key: 'k', style: STYLE.sourceMuted }, '· ' + members) : null,
-          );
-        });
+            { key: 'p', style: STYLE.sourceMuted },
+            Math.round((sources.counts[key] / totalCount) * 100) + '%',
+          ),
+          members.length > 1 ? h('span', { key: 'c', style: STYLE.sourceMuted }, open ? '▾' : '▸') : null,
+        );
+      });
+
+      /* The one detail worth showing without a click: which kinds the selected
+         family is made of, with their counts. */
+      const openMembers =
+        openFamily && openFamily !== ''
+          ? (sources.kinds || [])
+              .filter((item) => item.family === openFamily)
+              .map((item) =>
+                h(
+                  'span',
+                  { key: 'm-' + item.key, style: STYLE.sourceDetail },
+                  h('span', { key: 't' }, kindText[item.key] || kindText.other),
+                  h('span', { key: 'n', style: STYLE.sourceNum }, formatExact(item.count)),
+                ),
+              )
+          : null;
 
       /* What this Turn itself wrote: the number that makes a growing context
          legible (a Turn that adds 150 messages explains itself instantly). */
@@ -2057,14 +2221,14 @@ window.__ModuleLoader__.load({
             ? fresh.counts.prompt + fresh.counts.injected + fresh.counts.model + fresh.counts.tool + fresh.counts.other
             : 0;
       if (freshCount > 0) {
-        legend.push(
+        chips.push(
           h(
             'span',
-            { key: 'fresh', style: Object.assign({}, STYLE.sourceKey, { marginLeft: 'auto' }), title: TEXT.sourceFreshTitle },
+            { key: 'fresh', style: Object.assign({}, STYLE.sourceChip, { marginLeft: 'auto', cursor: 'default' }), title: TEXT.sourceFreshTitle },
             h('span', { key: 'l' }, TEXT.sourceFresh),
             h('span', { key: 'n', style: Object.assign({}, STYLE.sourceNum, { color: pal.famPrompt }) }, formatExact(freshCount)),
             typeof freshBytes === 'number' && freshBytes > 0
-              ? h('span', { key: 'b', style: STYLE.sourceMuted }, '· ' + formatBytes(freshBytes))
+              ? h('span', { key: 'b', style: STYLE.sourceMuted }, formatBytes(freshBytes))
               : null,
           ),
         );
@@ -2074,7 +2238,10 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'dsh-pl-sources', title: TEXT.sourceTitle },
         h('div', { key: 'bar', style: STYLE.sourceBar }, segments),
-        h('div', { key: 'legend', style: STYLE.sourceLegend }, legend),
+        h('div', { key: 'legend', style: STYLE.sourceLegend }, chips),
+        openMembers && openMembers.length
+          ? h('div', { key: 'detail', style: STYLE.sourceDetailRow }, openMembers)
+          : null,
       );
     }
 

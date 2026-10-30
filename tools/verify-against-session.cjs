@@ -331,11 +331,13 @@ if (newest) {
 }
 
 /* The per-message button starts from a durable message id, so prove that every
-   assistant message resolves to exactly one rebuilt call, on its own step. */
-const builtByTurn = {};
+   assistant message resolves to exactly one rebuilt call, on its own step.
+   Turns are rebuilt once and dropped again: the rebuilt requests hold the whole
+   prompt per call, and keeping all 55 Turns alive exhausted the default heap. */
 let mapped = 0;
 let unmapped = 0;
 const bad = [];
+const spotByTurn = new Map();
 for (const event of flat) {
   if (event.type !== 'assistant/message') continue;
   const id = event.data && event.data.message && event.data.message.id;
@@ -346,23 +348,29 @@ for (const event of flat) {
     bad.push({ id, why: 'locateMessage returned null' });
     continue;
   }
-  if (!builtByTurn[spot.turn]) {
-    builtByTurn[spot.turn] = api.buildTurnCalls(flat, spot.turn) || { calls: [] };
+  if (spotByTurn.has(spot.turn)) {
+    spotByTurn.get(spot.turn).push({ id, step: spot.step });
+  } else {
+    spotByTurn.set(spot.turn, [{ id, step: spot.step }]);
   }
-  const built = builtByTurn[spot.turn];
-  const index = api.callIndexForStep(built, spot.step);
-  const call = built.calls[index];
-  if (!call) {
-    unmapped += 1;
-    bad.push({ id, why: 'Turn ' + spot.turn + ' rebuilt no calls' });
-    continue;
+}
+for (const [turn, spots] of spotByTurn) {
+  const built = api.buildTurnCalls(flat, turn) || { calls: [] };
+  for (const spot of spots) {
+    const index = api.callIndexForStep(built, spot.step);
+    const call = built.calls[index];
+    if (!call) {
+      unmapped += 1;
+      bad.push({ id: spot.id, why: 'Turn ' + turn + ' rebuilt no calls' });
+      continue;
+    }
+    const callStep = call.meta && call.meta.step;
+    if (callStep !== spot.step) {
+      bad.push({ id: spot.id, why: 'step ' + spot.step + ' resolved to call of step ' + callStep });
+      continue;
+    }
+    mapped += 1;
   }
-  const callStep = call.meta && call.meta.step;
-  if (callStep !== spot.step) {
-    bad.push({ id, why: 'step ' + spot.step + ' resolved to call of step ' + callStep });
-    continue;
-  }
-  mapped += 1;
 }
 
 console.log(

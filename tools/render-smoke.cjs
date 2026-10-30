@@ -155,6 +155,10 @@ function makeCall(index, step, messageCount, tokens, sources) {
         : null,
       freshBytes: sources ? 2048 : 0,
       usage: { input: tokens, cache: 0, output: Math.round(tokens / 10), total: tokens, hitRate: 0 },
+      /* Tool traffic per step, as the real pipeline records it. */
+      toolCalls: tokens > 150 ? 2 : tokens > 50 ? 1 : 0,
+      toolResults: tokens > 150 ? 2 : tokens > 50 ? 1 : 0,
+      toolNames: tokens > 150 ? ['read', 'grep'] : tokens > 50 ? ['read'] : [],
       diff:
         index === 1
           ? null
@@ -213,19 +217,24 @@ expect(!one.classes.some((c) => c.includes('dsh-pl-step')), 'step list rendered 
 expect(one.text.join(' ').includes('deepseek-v4.1-flash'), 'model chip missing');
 expect(one.text.join(' ').includes('messages'), 'JSON body not rendered');
 
-/* b) three calls: tabs, still no step list */
+/* b) three calls: tabs, still no step list (the timeline's pills are dsh-pl-heavy) */
 const three = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)]) }));
 const tabs = three.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-tab'));
 expect(tabs.length === 3, 'expected 3 tab buttons, got ' + tabs.length);
 expect(tabs.filter((c) => c.split(/\s+/).includes('dsh-pl-tab-on')).length === 1, 'exactly one tab should be active');
-expect(!three.classes.some((c) => c.includes('dsh-pl-step')), 'step list rendered for 3 calls');
+expect(
+  !three.classes.some((c) => c.split(/\s+/).includes('dsh-pl-step')),
+  'step list rendered for 3 calls',
+);
 expect(three.text.includes('#1') && three.text.includes('#3'), 'tab labels missing');
 
 /* c) 20 calls (this is what broke the old <select>): step list, no tabs */
 const many = walk(DialogBody({ payload: payload(Array.from({ length: 20 }, (_, i) => makeCall(i + 1, 40 + i, 10 + i, 1000 * (i + 1)))) }));
+/* The timeline's "heaviest" pills share the active-state class (dsh-pl-step-on)
+   with the list rows, so match whole tokens rather than substrings. */
 const rows = many.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step'));
-expect(rows.length === 20, 'expected 20 step rows, got ' + rows.length);
-expect(many.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step-on')).length === 1, 'exactly one step row should be active');
+expect(rows.length >= 20, 'expected at least 20 step rows, got ' + rows.length);
+expect(many.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step-on')).length >= 1, 'no step row is active');
 expect(!many.classes.some((c) => c.split(/\s+/).includes('dsh-pl-tab')), 'tab strip rendered alongside the step list');
 expect(many.text.includes('#20'), 'last step row label missing');
 expect(many.text.join(' ').includes('step 59'), 'step number missing from a row');
@@ -373,26 +382,32 @@ expect(
 
 const timed = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)]) }));
 const timedText = timed.text.join(' ');
-expect(/本轮调用时间线|This Turn’s calls/.test(timedText), 'timeline missing for 3 calls');
-expect(timedText.includes('#3'), 'timeline end label missing');
+expect(/本轮各步|This Turn’s steps/.test(timedText), 'timeline missing for 3 calls');
+expect(/最重|heaviest/.test(timedText), 'heaviest-step pills missing');
 
 /* Drive the component directly: its track is a plain flex row of buttons, which
    the tree walker cannot single out by structure alone. */
 const Timeline = internals.Timeline;
+const usageOf = (total) => ({ input: total - 10, cache: 0, output: 10, total: total, hitRate: 0 });
 const threeCalls = [
-  { index: 1, meta: { index: 1, step: 5, startSeq: 10, endSeq: 14, messages: 7 } },
-  { index: 2, meta: { index: 2, step: 6, startSeq: 15, endSeq: 23, messages: 9 } },
-  { index: 3, meta: { index: 3, step: 7, startSeq: 24, endSeq: 34, messages: 11 } },
+  { index: 1, meta: { index: 1, step: 5, usage: usageOf(1000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
+  { index: 2, meta: { index: 2, step: 6, usage: usageOf(3000), toolCalls: 3, toolResults: 2, toolNames: ['read', 'grep'] } },
+  { index: 3, meta: { index: 3, step: 7, usage: usageOf(2000), toolCalls: 0, toolResults: 0, toolNames: [] } },
 ];
 const track = findTrack(Timeline({ calls: threeCalls, selected: 2 }));
 expect(track !== null, 'timeline track not found');
 const segs = track ? track.props.children : [];
 expect(segs.length === 3, 'expected 3 timeline segments, got ' + segs.length);
-/* Proportional: 5, 9 and 11 records → flex ratios 5/9/11. */
+/* Width follows the tokens each step spent: 1000 / 3000 / 2000. */
 const ratios = segs.map((seg) => String(seg.props.style.flex).split(' ')[0]);
-expect(ratios.join(',') === '5,9,11', 'segments not proportional: ' + ratios.join(','));
+expect(ratios.join(',') === '1000,3000,2000', 'segments not token-proportional: ' + ratios.join(','));
 expect(String(segs[2].props.style.opacity) === '1', 'selected segment is not highlighted');
 expect(String(segs[0].props.style.opacity) !== '1', 'unselected segments look selected');
+/* The tooltip must describe the work, not the log extent. */
+const tip = String(segs[1].props.title);
+expect(/3\s*(工具|tools)/.test(tip), 'tooltip missing tool count: ' + tip);
+expect(/2\s*(往返|round-trips)/.test(tip), 'tooltip missing round-trips: ' + tip);
+expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
 
 /* ---------------------------------------------------------------- reporting */

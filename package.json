@@ -1,6 +1,6 @@
 {
   "name": "dsh-payload",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "DSH Web GUI plugin: inspect the exact payload sent to the model for every assistant reply.",
   "type": "module",
   "license": "MIT",
@@ -13,18 +13,36 @@
   "bugs": {
     "url": "https://github.com/shengpj/dsh-payload/issues"
   },
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "payload", "request-inspector", "debug"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "payload",
+    "request-inspector",
+    "debug"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "docs", "README.md", "LICENSE"],
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   }
 }
