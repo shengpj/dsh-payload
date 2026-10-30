@@ -71,6 +71,8 @@ window.__ModuleLoader__.load({
           callSuffix: ' 次调用',
           callsShort: '次调用',
           reasonLabel: '触发原因',
+          jump: '对话',
+          jumpTitle: '跳到这条消息在对话里的位置',
           expandAll: '展开全部',
           collapseAll: '折叠全部',
           expand: '展开这一条',
@@ -158,6 +160,8 @@ window.__ModuleLoader__.load({
           callSuffix: '',
           callsShort: 'calls',
           reasonLabel: 'reason',
+          jump: 'Chat',
+          jumpTitle: 'Jump to where this message sits in the conversation',
           expandAll: 'Expand all',
           collapseAll: 'Collapse all',
           expand: 'Expand this message',
@@ -572,6 +576,17 @@ window.__ModuleLoader__.load({
         borderRadius: '4px',
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.07))',
       },
+      /* "→ 对话" jump affordance on one message row. Hidden until the row is
+         hovered so the JSON stays the thing you read; the CSS rule lives in
+         ACTION_CSS with the other class-based styling. */
+      jsonJump: { marginLeft: '8px', verticalAlign: 'middle' },
+      /* The one row the dialog was opened from: a soft accent band that fades,
+         so "this is the message you clicked" reads at a glance. */
+      jsonFocus: {
+        borderRadius: '4px',
+        outline: '2px solid var(--dsw-alias-brand-primary, #2f6fed)',
+        outlineOffset: '1px',
+      },
 
       tabs: {
         flex: '0 0 auto',
@@ -751,6 +766,54 @@ window.__ModuleLoader__.load({
       const source = (message && message.source) || (data && data.source) || null;
       if (source && typeof source.kind === 'string') return source.kind;
       return '';
+    }
+
+    /*
+     * Conversation cross-link keys.
+     *
+     * The chat plugin publishes every rendered row under
+     * `conversationContextKey(kind, id)` = `${kind.length}:${kind}${id}` and puts
+     * it on the DOM as `data-chat-node-key` (plus `data-chat-turn` on the owning
+     * Turn). Mirroring that formula here is what lets a message inside the JSON
+     * jump to its own bubble, so the three kinds that a request is made of are
+     * reproduced verbatim:
+     *   assistant-step  id `${turn}:${step}`   (one step = one model call)
+     *   input-message   id String(event.data.id)  (user / developer / system rows)
+     *   tool-call       id String(callId)
+     * Anything else (a record the conversation does not render as its own row)
+     * gets no key and simply offers no jump.
+     */
+    function conversationNodeKey(kind, id) {
+      return kind.length + ':' + kind + id;
+    }
+
+    /** The cross-link target of one log event, or null when it has no row. */
+    function messageLinkOf(type, data, role, raw) {
+      if (role === 'assistant') {
+        const turn = data && data.turn;
+        const step = data && data.step;
+        if (typeof turn === 'number' && typeof step === 'number') {
+          return { key: conversationNodeKey('assistant-step', turn + ':' + step), turn: turn };
+        }
+        return null;
+      }
+      if (role === 'tool') {
+        const callId =
+          raw && raw.toolCallId !== undefined
+            ? raw.toolCallId
+            : raw && raw.tool_call_id !== undefined
+              ? raw.tool_call_id
+              : undefined;
+        if (callId !== undefined) return { key: conversationNodeKey('tool-call', String(callId)), turn: null };
+        return null;
+      }
+      const message = data && data.message && typeof data.message === 'object' ? data.message : null;
+      const id = (message && message.id !== undefined ? message.id : data && data.id) ?? undefined;
+      if (id !== undefined) {
+        const turn = data && typeof data.turn === 'number' ? data.turn : null;
+        return { key: conversationNodeKey('input-message', String(id)), turn: turn };
+      }
+      return null;
     }
 
     /** Which family a source kind belongs to; unknown kinds are 'other'. */
@@ -970,6 +1033,18 @@ window.__ModuleLoader__.load({
               : data;
 
         const message = { role: role, content: flattenContent(raw.content) };
+        /* Non-enumerable so it never reaches JSON.stringify or the copied
+           payload, but the viewer/harness can still tell which turn+step
+           produced this message — that is what its bubble is keyed by. */
+        Object.defineProperty(message, '__origin', {
+          value: {
+            turn: typeof (data && data.turn) === 'number' ? data.turn : null,
+            step: typeof (data && data.step) === 'number' ? data.step : null,
+          },
+          enumerable: false,
+          writable: true,
+          configurable: true,
+        });
 
         if (role === 'tool') {
           const callId = raw.toolCallId !== undefined ? raw.toolCallId : raw.tool_call_id;
@@ -992,12 +1067,17 @@ window.__ModuleLoader__.load({
           kind: kind,
           byte: bytes,
           message: message,
+          /* Where this message is rendered in the conversation, so the viewer
+             can jump from a JSON row to its bubble. Computed once here, from
+             the same record the message was built from. */
+          link: messageLinkOf(type, data, role, raw),
           track: [{ seq: seq, kind: kind, family: familyOf(kind), byte: bytes }],
         });
       }
 
       const messages = [];
       const track = [];
+      const links = [];
       let historyEnd = boundary < 0 ? 0 : null;
       for (let i = 0; i < items.length; i += 1) {
         const message = items[i].message;
@@ -1014,12 +1094,15 @@ window.__ModuleLoader__.load({
         if (historyEnd === null && items[i].seq >= boundary) historyEnd = messages.length;
         messages.push(message);
         track.push(items[i].track);
+        links.push(items[i].link || null);
       }
       return {
         messages: messages,
         historyEnd: historyEnd === null ? messages.length : historyEnd,
         /* Per-message provenance, aligned with `messages`. */
         track: track,
+        /* Per-message conversation target, aligned with `messages`. */
+        links: links,
       };
     }
 
@@ -1248,6 +1331,10 @@ window.__ModuleLoader__.load({
                everything before it. Kept on `meta`, never inside `request`, so
                the payload itself stays byte-for-byte what was sent. */
             historyEnd: built.historyEnd,
+            /* Parallel to `request.messages`: each entry names the conversation
+               row (or null) a message is rendered as, so the viewer can link the
+               two sides without re-deriving anything. */
+            messageLinks: built.links,
             /* Why the messages are there, and which of them are new this Turn. */
             sources: summarizeSources(built.track.map(firstRecord)),
             freshSources: summarizeSources(
@@ -1584,6 +1671,40 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * Scroll the conversation to one message's bubble.
+     *
+     * The chat plugin publishes each rendered row under `data-chat-node-key`
+     * (the same string `messageLinkOf` builds) and every Turn root under
+     * `data-chat-turn`. A row inside a collapsed Turn is not in the DOM, so the
+     * precise key is tried first and the Turn is the honest fallback; if neither
+     * is mounted the click is simply a no-op.
+     */
+    function scrollConversationTo(link) {
+      if (!link || typeof link.key !== 'string') return;
+      if (typeof document === 'undefined' || !document) return;
+      const find = (selector) => {
+        try {
+          return document.querySelector(selector);
+        } catch (err) {
+          return null;
+        }
+      };
+      let row = find('[data-chat-node-key="' + link.key.replace(/"/g, '\\"') + '"]');
+      if (!row && typeof link.turn === 'number') row = find('[data-chat-turn="' + link.turn + '"]');
+      if (!row) return;
+      try {
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (err) {
+        /* older engines: fall back to a plain jump */
+        try {
+          row.scrollIntoView();
+        } catch (err2) {
+          /* nothing else to do */
+        }
+      }
+    }
+
     /** Rebuilding a payload walks the whole window, so keep it per (session, turn, window end). */
     const builtCache = new Map();
     const BUILT_CACHE_LIMIT = 40;
@@ -1657,6 +1778,17 @@ window.__ModuleLoader__.load({
       'background-color:var(--dsh-pl-sb-thumb-active,#2f6fed);',
       'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
+      /* Message → conversation jump: a link chip on a message row in the tree.
+         Revealed on row hover (CSS, because inline styles cannot express :hover). */
+      '.dsh-pl-jump{display:none;align-items:center;gap:3px;margin-left:8px;padding:0 6px;',
+      'height:18px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.35));',
+      'border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.6));',
+      'color:var(--dsw-alias-label-secondary,#5b6472);font-family:inherit;font-size:11px;',
+      'line-height:16px;cursor:pointer;vertical-align:middle}',
+      '.dsh-pl-jump:hover{color:var(--dsw-alias-brand-primary,#2f6fed);',
+      'border-color:var(--dsw-alias-brand-primary,#2f6fed)}',
+      '.dsh-pl-jump:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      '.dsh-pl-msg:hover > .dsh-pl-jump,.dsh-pl-msg:hover .dsh-pl-jump{display:inline-flex}',
     ].join('');
 
     /** Install the trigger stylesheet once; failure only costs cosmetics. */
@@ -1827,6 +1959,8 @@ window.__ModuleLoader__.load({
       const offset = props.offset || 0;
       const pal = props.pal || PALETTES.light;
       const mode = props.mode;
+      const links = Array.isArray(props.links) ? props.links : null;
+      const onJump = props.onJump;
       const indentation = { paddingLeft: depth * 14 + 'px' };
       const [open, setOpen] = React.useState(mode === 'all');
 
@@ -1866,9 +2000,40 @@ window.__ModuleLoader__.load({
               depth: depth + 1,
               mode: mode,
               pal: pal,
+              jump: links ? links[index] || null : null,
+              onJump: onJump,
             }),
           ),
         ),
+      );
+    }
+
+    /**
+     * The "→ 对话" chip on one message row. It is a link, not a control: it
+     * closes the dialog and scrolls the conversation to the row this message was
+     * rendered as. `props.jump` is `{ key, turn }` (see `messageLinkOf`); the
+     * row's own click (expand/collapse) must not fire, so the handler stops
+     * propagation.
+     */
+    function renderJump(props, pal) {
+      const jump = props.jump;
+      if (!jump || !jump.key) return null;
+      return h(
+        'button',
+        {
+          key: 'jump',
+          type: 'button',
+          className: 'dsh-pl-jump',
+          style: STYLE.jsonJump,
+          title: TEXT.jumpTitle,
+          'aria-label': TEXT.jumpTitle,
+          onClick: (event) => {
+            if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+            const handler = props.onJump;
+            if (typeof handler === 'function') handler(jump);
+          },
+        },
+        TEXT.jump + ' ↗',
       );
     }
 
@@ -1901,11 +2066,20 @@ window.__ModuleLoader__.load({
               background: pal.currentBg,
             })
           : null;
+      /* The message this dialog was opened from: banded so it is findable, and
+         tagged with a DOM id so DialogBody can scroll the body to it. */
+      const focusBand = props.focus === true ? STYLE.jsonFocus : null;
+      const wrapStyle = props.focus === true ? Object.assign({}, band, focusBand) : band;
       const wrap = (style, node) => (style ? h('div', { style: style }, node) : node);
+      const focusId = props.focus === true ? 'dsh-pl-focus' : undefined;
       /* Forwarded down to the `messages` array, which lives one level below the
          request root. */
-      const childProps =
-        typeof props.messagesHistoryEnd === 'number' ? { messagesHistoryEnd: props.messagesHistoryEnd } : null;
+      const childProps = {};
+      if (typeof props.messagesHistoryEnd === 'number') childProps.messagesHistoryEnd = props.messagesHistoryEnd;
+      if (Array.isArray(props.messageLinks)) childProps.messageLinks = props.messageLinks;
+      if (typeof props.onJump === 'function') childProps.onJump = props.onJump;
+      if (typeof props.focusKey === 'string') childProps.focusKey = props.focusKey;
+      const forwarded = Object.keys(childProps).length ? childProps : null;
 
       const [open, setOpen] = React.useState(
         isContainer ? (mode === 'all' ? depth <= EXPAND_ALL_DEPTH : mode === 'none' ? false : depth < 2) : false,
@@ -1916,10 +2090,10 @@ window.__ModuleLoader__.load({
 
       if (!isContainer) {
         return wrap(
-          band,
+          wrapStyle,
           h(
             'div',
-            { style: Object.assign({}, STYLE.jsonLine, indentation) },
+            { style: Object.assign({}, STYLE.jsonLine, indentation), id: focusId },
             label,
             colon,
             h('span', { key: 'v', style: valueStyle(value, pal) }, literalOf(value)),
@@ -1932,8 +2106,10 @@ window.__ModuleLoader__.load({
         'div',
         {
           key: 'h',
-          style: Object.assign({}, STYLE.jsonLine, STYLE.jsonClickable, indentation),
+          id: focusId,
+          style: Object.assign({}, STYLE.jsonLine, STYLE.jsonClickable, indentation, props.focus === true ? focusBand : null),
           onClick: () => setOpen(!open),
+          className: props.jump ? 'dsh-pl-msg' : undefined,
         },
         h('span', { key: 't', style: { display: 'inline-block', width: '14px', color: pal.toggle, fontWeight: 700 } }, open ? '▾' : '▸'),
         label,
@@ -1957,12 +2133,19 @@ window.__ModuleLoader__.load({
         split && historyEnd > 0
           ? h('span', { key: 'his', style: Object.assign({}, STYLE.jsonBadgeMuted, { color: pal.punct }) }, TEXT.history + ' ' + historyEnd)
           : null,
+        props.jump && !isArray
+          ? renderJump(props, pal)
+          : null,
         open ? null : h('span', { key: 'e', style: { color: pal.punct } }, isArray ? ']' : '}'),
       );
 
-      if (!open) return wrap(band, head);
+      if (!open) return wrap(wrapStyle, head);
 
       let children;
+      const links = isArray && name === 'messages' && Array.isArray(props.messageLinks) ? props.messageLinks : null;
+      const onJump = props.onJump;
+      const focusKey = props.focusKey;
+      const markFocus = (link) => (focusKey && link && link.key === focusKey ? true : false);
       if (isArray && split && historyEnd > 0) {
         children = [
           h(JsonHistoryGroup, {
@@ -1972,6 +2155,9 @@ window.__ModuleLoader__.load({
             depth: depth + 1,
             mode: mode,
             pal: pal,
+            links: links ? links.slice(0, historyEnd) : null,
+            onJump: onJump,
+            focusKey: focusKey,
           }),
         ].concat(
           value.slice(historyEnd).map((item, index) =>
@@ -1983,24 +2169,37 @@ window.__ModuleLoader__.load({
               mode: mode,
               pal: pal,
               current: true,
+              jump: links ? links[historyEnd + index] || null : null,
+              onJump: onJump,
+              focus: markFocus(links ? links[historyEnd + index] : null),
             }),
           ),
         );
       } else if (isArray) {
         children = value.map((item, index) =>
-          h(JsonNode, { key: index, name: String(index), value: item, depth: depth + 1, mode: mode, pal: pal }),
+          h(JsonNode, {
+            key: index,
+            name: String(index),
+            value: item,
+            depth: depth + 1,
+            mode: mode,
+            pal: pal,
+            jump: links ? links[index] || null : null,
+            onJump: onJump,
+            focus: markFocus(links ? links[index] : null),
+          }),
         );
       } else {
         children = Object.keys(value).map((key) =>
           h(
             JsonNode,
-            Object.assign({ key: key, name: key, value: value[key], depth: depth + 1, mode: mode, pal: pal }, childProps),
+            Object.assign({ key: key, name: key, value: value[key], depth: depth + 1, mode: mode, pal: pal, onJump: onJump, focusKey: focusKey }, forwarded),
           ),
         );
       }
 
       return wrap(
-        band,
+        wrapStyle,
         h(
           'div',
           { style: STYLE.jsonNode },
@@ -2412,6 +2611,14 @@ window.__ModuleLoader__.load({
         node.scrollTop = where === 'end' ? node.scrollHeight : 0;
       };
 
+      /* Message → conversation. Close the dialog first, then scroll the chat to
+         the row this message was rendered as. The precise row is only mounted
+         when its group is expanded, so the owning Turn is the fallback. */
+      const jumpToMessage = (link) => {
+        publishDialog(null);
+        scrollConversationTo(link);
+      };
+
       const index = calls.length ? Math.min(Math.max(selected, 0), calls.length - 1) : 0;
       const call = calls.length ? calls[index] : null;
       const meta = (call && call.meta) || {};
@@ -2428,11 +2635,24 @@ window.__ModuleLoader__.load({
         totals.output += itemUsage.output || 0;
       }
 
-      /* A new call or a different expand mode is a different document: start at the top. */
+      /* A new call or a different expand mode is a different document: start at
+         the top — unless this dialog was opened from a specific message, in
+         which case land on that message's own line instead. */
       React.useEffect(
         () => {
           const node = bodyRef.current;
-          if (node) node.scrollTop = 0;
+          if (!node) return;
+          if (typeof payload.focusKey === 'string' && typeof document !== 'undefined' && document) {
+            const target = document.getElementById('dsh-pl-focus');
+            if (target) {
+              /* Keep it in view with a little air above, without yanking the
+                 whole pane: the closest scrollable ancestor is the body. */
+              const top = target.offsetTop - Math.max(24, node.clientHeight * 0.25);
+              node.scrollTop = top > 0 ? top : 0;
+              return;
+            }
+          }
+          node.scrollTop = 0;
         },
         [index, mode],
       );
@@ -2793,6 +3013,11 @@ window.__ModuleLoader__.load({
               pal: pal,
               /* Where this Turn's own messages start inside request.messages. */
               messagesHistoryEnd: meta.historyEnd,
+              /* One conversation-row target per message, so a row can jump. */
+              messageLinks: meta.messageLinks,
+              onJump: jumpToMessage,
+              /* The message this dialog was opened from: banded + scrolled to. */
+              focusKey: payload.focusKey,
             })
           : h('div', { style: STYLE.note }, TEXT.empty),
       );
@@ -3020,6 +3245,9 @@ window.__ModuleLoader__.load({
               data: built,
               selectedIndex: callIndexForStep(built, spot.step),
               step: spot.step,
+              /* The row this dialog was opened FROM, so the JSON can open already
+                 scrolled to (and highlighting) that message's own line. */
+              focusKey: conversationNodeKey('assistant-step', spot.turn + ':' + spot.step),
             };
           } catch (err) {
             return { status: 'error', message: String((err && err.message) || err) };

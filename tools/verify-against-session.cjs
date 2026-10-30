@@ -125,6 +125,21 @@ const api = loadPlugin();
 const flat = api.collectEvents(events.map((event) => ({ type: 'event', event })));
 console.log('surface events: ' + flat.length);
 
+/* A rebuilt Turn holds the ENTIRE conversation as message objects — megabytes per
+   call. Every loop below rebuilds one Turn, checks it, then calls `release` so the
+   heap stays flat; the session log is large enough to OOM otherwise. */
+const gc = typeof globalThis.gc === 'function' ? globalThis.gc : null;
+function release(built) {
+  if (!built) return;
+  if (Array.isArray(built.calls)) {
+    for (const call of built.calls) {
+      if (call && call.request && Array.isArray(call.request.messages)) call.request.messages.length = 0;
+    }
+    built.calls.length = 0;
+  }
+  if (gc) gc();
+}
+
 /* Ground truth: the provider-reported usage of every answered call, per Turn. */
 const logUsage = {};
 for (const event of events) {
@@ -189,6 +204,8 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
       split,
   );
   if (calls.length) newest = { turn, call: sample };
+  /* Keep only the newest Turn alive for the summary print below; free the rest. */
+  if (turn !== newest.turn) release(built);
 }
 
 /* Source provenance: every rebuilt message must be classified exactly once, so
@@ -279,6 +296,9 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
         diffProblems.push('Turn ' + turn + ' #' + item.index + ': added role ' + entry.role + ' != ' + message.role);
     }
   }
+  /* One Turn's rebuilt requests already hold the whole conversation; release
+     them before the next rebuild or the heap grows without bound. */
+  release(built);
 }
 
 console.log('\n=== adjacent-call diff: ' + diffCalls + ' call(s), ' + diffProblems.length + ' problem(s) ===');
@@ -314,6 +334,7 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
     const span = meta.endSeq - meta.startSeq + 1;
     if (span > longest.span) longest = { step: meta.step, turn, span };
   }
+  release(built);
 }
 
 console.log('\n=== step frames: ' + frameCalls + ' call(s), ' + frameProblems.length + ' problem(s) ===');
@@ -389,6 +410,7 @@ for (const [turn, spots] of spotByTurn) {
     }
     mapped += 1;
   }
+  release(built);
 }
 
 console.log(
@@ -397,4 +419,73 @@ console.log(
 );
 for (const item of bad.slice(0, 10)) console.log('  ' + item.id + ': ' + item.why);
 if (!bad.length) console.log('  every assistant message resolves to its own step call');
+
+/* The JSON→conversation cross-link depends on `meta.messageLinks` being exactly
+   as long as `request.messages`, and on every assistant message resolving to the
+   node key the chat plugin publishes: `14:assistant-step<turn>:<step>`. Tool
+   results must resolve to `9:tool-call<callId>`, and every user/system/developer
+   row to `13:input-message<id>`. Proved against the rebuilt requests, one Turn
+   at a time so the heap stays flat. */
+let linkCalls = 0;
+const linkProblems = [];
+for (const start of flat.filter((event) => event.type === 'turn/start')) {
+  const turn = start.data && start.data.turn;
+  const built = api.buildTurnCalls(flat, turn);
+  if (!built || !built.calls) continue;
+  for (const item of built.calls) {
+    linkCalls += 1;
+    const links = item.meta && item.meta.messageLinks;
+    const messages = item.request && item.request.messages;
+    if (!Array.isArray(links)) {
+      linkProblems.push('Turn ' + turn + ' #' + item.index + ': no messageLinks array');
+      continue;
+    }
+    if (links.length !== messages.length) {
+      linkProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': messageLinks ' + links.length + ' vs messages ' + messages.length,
+      );
+      continue;
+    }
+    for (let i = 0; i < messages.length; i += 1) {
+      const message = messages[i];
+      const link = links[i];
+      if (message.role === 'assistant') {
+        /* Which step produced this message is a property of the MESSAGE, not of
+           the call being inspected: a request carries the replies of every
+           earlier step of the Turn too, and each of those links to its own
+           bubble. So the expected key comes from the message's own
+           `data.turn`/`data.step`, mirrored from the same `assistant-step`
+           formula the chat plugin publishes. */
+        const own = message.__origin;
+        if (!own || typeof own.turn !== 'number' || typeof own.step !== 'number') {
+          continue;
+        }
+        const want = '14:assistant-step' + own.turn + ':' + own.step;
+        if (!link || link.key !== want) {
+          linkProblems.push('Turn ' + turn + ' #' + item.index + ' msg ' + i + ': assistant link ' + (link ? link.key : 'null') + ' != ' + want);
+          break;
+        }
+      } else if (message.role === 'tool') {
+        const want = message.tool_call_id !== undefined ? '9:tool-call' + message.tool_call_id : null;
+        if (want === null) continue;
+        if (!link || link.key !== want) {
+          linkProblems.push('Turn ' + turn + ' #' + item.index + ' msg ' + i + ': tool link ' + (link ? link.key : 'null') + ' != ' + want);
+          break;
+        }
+      } else if (link && !/^13:input-message/.test(link.key)) {
+        linkProblems.push('Turn ' + turn + ' #' + item.index + ' msg ' + i + ': unexpected link ' + link.key);
+        break;
+      }
+    }
+  }
+  /* The rebuilt prompt of a Turn is the whole conversation: drop it before the
+     next rebuild or the harness exhausts the heap on a long session. */
+  release(built);
+}
+
+console.log('\n=== cross-links: ' + linkCalls + ' call(s), ' + linkProblems.length + ' problem(s) ===');
+for (const item of linkProblems.slice(0, 10)) console.log('  ' + item);
+if (!linkProblems.length)
+  console.log('  every message carries the conversation node key the chat plugin publishes');
+
 
