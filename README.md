@@ -37,6 +37,8 @@ https://raw.githubusercontent.com/shengpj/dsh-payload/main/market/index.json
 
 之后在 Discover 里搜 `dsh-payload` 就能一键安装——索引里的版本指向 commit-pinned 的 git 源，装到的就是仓库里对应的那一版。
 
+发新版本时用 `node tools/build-market-index.mjs --commit <40 位 SHA> --version <新版本号>` 往索引里加一条（旧版本条目会保留）。
+
 **方式三：本地目录**（改代码时更方便，`link:` 不需要重装）：
 
 ```
@@ -110,6 +112,7 @@ tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每
 tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 7 个场景
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
+tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
 docs/notes.md                      实现细节与踩坑记录
 market/index.json                  插件市场索引（format 1）
 ```
