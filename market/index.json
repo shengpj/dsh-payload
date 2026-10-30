@@ -60,6 +60,15 @@
       },
       "versions": [
         {
+          "version": "1.5.2",
+          "publishTimestamp": 1793341556,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/shengpj/dsh-payload",
+            "commit": "789f41f2b0dea85b6c4a5a5bbe2b3d5b8e0ee41c"
+          }
+        },
+        {
           "version": "1.5.1",
           "publishTimestamp": 1793339351,
           "source": {
