@@ -110,7 +110,6 @@ window.__ModuleLoader__.load({
           timelineHint: '每段是一步，宽度按该步消耗的 token；点一段切到那次调用',
           timelineSelected: '当前',
           timelineHeaviest: '最重',
-          timelineHeavyTitle: '按 token 排序的前几步，点击切换',
           stepWord: 'step',
           toolCount: '工具',
           toolNone: '无工具',
@@ -199,7 +198,6 @@ window.__ModuleLoader__.load({
           timelineHint: 'One segment per step, width by the tokens it spent; click to switch',
           timelineSelected: 'selected',
           timelineHeaviest: 'heaviest',
-          timelineHeavyTitle: 'Top steps by tokens — click to switch',
           stepWord: 'step',
           toolCount: 'tools',
           toolNone: 'no tools',
@@ -2013,6 +2011,9 @@ window.__ModuleLoader__.load({
       });
       const totalTokens = weights.reduce((acc, value) => acc + (value > 1 ? value : 0), 0);
 
+      /* On a pill there is room for two facts and no more. Which step it is wins
+         (what the reader is scanning for); the tool traffic moves into the hover
+         tooltip, which already carries it, so nothing is lost. */
       const segments = calls.map((item, position) => {
         const meta = item.meta || {};
         const chosen = position === props.selected;
@@ -2052,6 +2053,13 @@ window.__ModuleLoader__.load({
       const heaviest = ranked.map((entry) => {
         const meta = entry.item.meta || {};
         const toolCalls = typeof meta.toolCalls === 'number' ? meta.toolCalls : 0;
+        const toolResults = typeof meta.toolResults === 'number' ? meta.toolResults : 0;
+        const roundTrips = Math.min(toolCalls, toolResults);
+        const parts = ['step ' + (meta.step !== undefined ? meta.step : '?')];
+        parts.push(toolCalls ? toolCalls + ' ' + TEXT.toolCount : TEXT.toolNone);
+        if (roundTrips) parts.push(roundTrips + ' ' + TEXT.roundTrips);
+        parts.push(formatTokens(entry.usage.total) + ' ' + TEXT.tokens);
+        if (meta.toolNames && meta.toolNames.length) parts.push(meta.toolNames.slice(0, 4).join(', '));
         return h(
           'button',
           {
@@ -2059,12 +2067,11 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'dsh-pl-heavy' + (entry.position === props.selected ? ' dsh-pl-step-on' : ''),
             style: STYLE.timelineHeavy,
-            title: TEXT.timelineHeavyTitle,
+            title: parts.join(' · '),
             onClick: onSelect ? () => onSelect(entry.position) : undefined,
           },
           h('span', { key: 'n', style: STYLE.timelineHeavyNo }, '#' + (entry.item.index || entry.position + 1)),
           h('span', { key: 't', style: STYLE.timelineHeavyNum }, formatTokens(entry.usage.total)),
-          toolCalls ? h('span', { key: 'c', style: STYLE.sourceMuted }, toolCalls + ' ' + TEXT.toolCount) : null,
         );
       });
 

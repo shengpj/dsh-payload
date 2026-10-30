@@ -110,6 +110,9 @@ function render(node, sink) {
   const className = node.props && node.props.className;
   if (typeof className === 'string') {
     sink.classes.push(className);
+    /* Hover tooltips are element titles; keep them so assertions can check what a
+       pill or segment says when the pointer rests on it. */
+    if (typeof node.props.title === 'string') sink.tips.push(node.props.title);
   }
   sink.tags.push(String(node.type));
   const siblings = node.props.children;
@@ -125,7 +128,7 @@ function render(node, sink) {
 }
 
 function walk(element) {
-  const sink = { text: [], classes: [], tags: [], dupeKeys: [] };
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [] };
   render(element, sink);
   return sink;
 }
@@ -423,6 +426,44 @@ expect(/3\s*(工具|tools)/.test(tip), 'tooltip missing tool count: ' + tip);
 expect(/2\s*(往返|round-trips)/.test(tip), 'tooltip missing round-trips: ' + tip);
 expect(/3\s*(k|000)|3,000/.test(tip), 'tooltip missing tokens: ' + tip);
 expect(Timeline({ calls: threeCalls.slice(0, 1), selected: 0 }) === null, 'timeline rendered for one call');
+
+/* Tool traffic appears only when it varies between steps; a Turn where every
+   step calls one tool once must not repeat "1 工具 · 1 往返" on every pill. */
+const uniformCalls = [
+  { index: 1, meta: { index: 1, step: 5, usage: usageOf(1000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
+  { index: 2, meta: { index: 2, step: 6, usage: usageOf(3000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
+  { index: 3, meta: { index: 3, step: 7, usage: usageOf(2000), toolCalls: 1, toolResults: 1, toolNames: ['read'] } },
+];
+/* Pills are #n + tokens only; tool traffic lives in the hover tooltip. */
+const heavyOf = (calls) => {
+  const tree = Timeline({ calls, selected: 0 });
+  const labels = [];
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    const props = node.props || {};
+    if (typeof props.className === 'string' && props.className.includes('dsh-pl-heavy') && Array.isArray(props.children)) {
+      const text = props.children.filter((c) => c && typeof c === 'object').map((c) => String((c.props && c.props.children) || ''));
+      labels.push({ text: text.join(' '), tip: String(props.title || '') });
+    }
+    visit(props.children);
+  };
+  visit(tree);
+  return labels;
+};
+const uniformPills = heavyOf(uniformCalls);
+expect(uniformPills.length > 0, 'no heaviest pills rendered');
+expect(
+  uniformPills.every((pill) => !/工具|tools/.test(pill.text)),
+  'pill still prints the tool count: ' + JSON.stringify(uniformPills.map((p) => p.text)),
+);
+expect(
+  uniformPills.some((pill) => /工具|tools/.test(pill.tip)),
+  'tool count vanished from the tooltip too: ' + JSON.stringify(uniformPills[0]),
+);
+const varied = walk(Timeline({ calls: threeCalls, selected: 0 }));
+const variedTip = varied.text.join(' ') + ' ' + varied.tips.join(' ');
+expect(/工具|tools|往返|round-trips/.test(variedTip), 'varying tool counts no longer printed');
 
 /* l) the error boundary: a payload that makes the body throw must still render
       an explanatory dialog instead of blanking the overlay. */
