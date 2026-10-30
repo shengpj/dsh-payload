@@ -31,6 +31,31 @@ const textKeys = [
   ),
 ];
 
+/* A missing key is worse than a dead one: `TEXT.nope` renders the literal string
+   "undefined" in the UI instead of failing. The two dictionaries are the ZH and
+   EN halves of `ZH ? {...} : {...}`, so both are checked against every read. */
+const textLines = src.split(/\r?\n/);
+const textFrom = textLines.findIndex((line) => /const TEXT = ZH/.test(line));
+const branchStart = []; // indexes of the `? {` / `: {` lines that open a branch
+for (let index = textFrom; index < textFrom + 400; index += 1) {
+  const line = textLines[index] || '';
+  if (/^\s+\? \{\s*$/.test(line) || /^\s+: \{\s*$/.test(line)) branchStart.push(index + 1);
+  if (/^\s+\};\s*$/.test(line)) break;
+}
+const dictNames = ['zh', 'en'];
+const reads = [...new Set([...src.matchAll(/TEXT\.([A-Za-z][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
+branchStart.forEach((from, index) => {
+  const present = new Set();
+  for (let line = from; line < textLines.length; line += 1) {
+    if (/^\s+\};?\s*$/.test(textLines[line])) break;
+    const hit = /^\s+([A-Za-z][A-Za-z0-9_]*):/.exec(textLines[line]);
+    if (hit) present.add(hit[1]);
+  }
+  for (const key of reads) {
+    if (!present.has(key)) console.log('MISSING text (' + (dictNames[index] || index) + '):', key);
+  }
+});
+
 /* `SOURCE_KINDS` is a lookup table, not a style/text block, but it lives at the
    same indentation; its keys are read as `SOURCE_KINDS[kind]`, so require the
    same dotted form or a bracket lookup before calling a key dead. */
