@@ -173,6 +173,51 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
   if (calls.length) newest = { turn, call: sample };
 }
 
+/* Source provenance: every rebuilt message must be classified exactly once, so
+   the breakdown the dialog shows can never disagree with the message count. */
+const sourceProblems = [];
+let sourceCalls = 0;
+const familyTotals = { prompt: 0, injected: 0, model: 0, tool: 0, other: 0 };
+for (const start of flat.filter((event) => event.type === 'turn/start')) {
+  const turn = start.data.turn;
+  const built = api.buildTurnCalls(flat, turn);
+  if (!built) continue;
+  for (const item of built.calls) {
+    const meta = item.meta || {};
+    const sources = meta.sources;
+    const fresh = meta.freshSources;
+    if (!sources || !sources.counts) {
+      sourceProblems.push('Turn ' + turn + ' #' + item.index + ': no source summary');
+      continue;
+    }
+    sourceCalls += 1;
+    const sum = ['prompt', 'injected', 'model', 'tool', 'other'].reduce(
+      (acc, key) => acc + (sources.counts[key] || 0),
+      0,
+    );
+    if (sum !== meta.messages)
+      sourceProblems.push('Turn ' + turn + ' #' + item.index + ': families sum ' + sum + ' != messages ' + meta.messages);
+    const freshSum = ['prompt', 'injected', 'model', 'tool', 'other'].reduce(
+      (acc, key) => acc + ((fresh && fresh.counts[key]) || 0),
+      0,
+    );
+    const expectedFresh = meta.messages - meta.historyEnd;
+    if (freshSum !== expectedFresh)
+      sourceProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': fresh sum ' + freshSum + ' != messages-historyEnd ' + expectedFresh,
+      );
+    if (!(meta.freshBytes >= 0))
+      sourceProblems.push('Turn ' + turn + ' #' + item.index + ': freshBytes ' + meta.freshBytes);
+    for (const key of Object.keys(familyTotals)) familyTotals[key] += sources.counts[key] || 0;
+  }
+}
+
+console.log('\n=== source breakdown: ' + sourceCalls + ' call(s), ' + sourceProblems.length + ' problem(s) ===');
+console.log('  messages by family: ' + JSON.stringify(familyTotals));
+for (const item of sourceProblems.slice(0, 10)) console.log('  ' + item);
+if (!sourceProblems.length)
+  console.log('  every message is classified exactly once; fresh = messages - historyEnd');
+
 console.log(
   '\n=== turn/current split: ' + splitProblems.length + ' problem(s) ===',
 );

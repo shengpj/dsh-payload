@@ -31,7 +31,6 @@ window.__ModuleLoader__.load({
     const TEXT = ZH
       ? {
           show: '查看请求 JSON',
-          hide: '收起',
           copy: '复制',
           copied: '已复制',
           loading: '正在读取本轮请求…',
@@ -77,10 +76,29 @@ window.__ModuleLoader__.load({
           toEnd: '末尾',
           railTitle: '拖动滚动条可直达任意位置',
           close: '关闭',
+          sourceTitle:
+            '这份请求由什么组成：你输入的话、harness 自动注入的上下文、模型回复、工具往返。占比是"消息字节"占比，非 token。',
+          sourceFamilyPrompt: '你的输入',
+          sourceFamilyInjected: '自动注入',
+          sourceFamilyModel: '模型回复',
+          sourceFamilyTool: '工具往返',
+          sourceFamilyOther: '其他',
+          sourceFresh: '本轮新增',
+          sourceFreshTitle: '其中由本轮写进请求的部分（其余是历史携带）。',
+          sourceKindUser: '用户消息',
+          sourceKindApproval: '审批交互',
+          sourceKindTimeContext: '时间上下文',
+          sourceKindRuntimeContext: '运行时上下文',
+          sourceKindSkillCatalog: '技能目录',
+          sourceKindModelSelection: '模型选择',
+          sourceKindSystemPrompt: '系统提示词',
+          sourceKindToolRegistry: '工具登记',
+          sourceKindModel: '模型回复',
+          sourceKindTool: '工具结果',
+          sourceKindOther: '未标注来源',
         }
       : {
           show: 'Request JSON',
-          hide: 'Hide',
           copy: 'Copy',
           copied: 'Copied',
           loading: 'Reading this turn’s request…',
@@ -126,6 +144,26 @@ window.__ModuleLoader__.load({
           toEnd: 'End',
           railTitle: 'Drag the rail to jump anywhere in the payload',
           close: 'Close',
+          sourceTitle:
+            'What this request is made of: your prompt, context the Harness injected, model replies, tool round-trips. Shares are message bytes, not tokens.',
+          sourceFamilyPrompt: 'your prompt',
+          sourceFamilyInjected: 'injected',
+          sourceFamilyModel: 'model replies',
+          sourceFamilyTool: 'tool round-trips',
+          sourceFamilyOther: 'other',
+          sourceFresh: 'new this turn',
+          sourceFreshTitle: 'The part this Turn wrote into the request; the rest is carried history.',
+          sourceKindUser: 'user message',
+          sourceKindApproval: 'approval',
+          sourceKindTimeContext: 'time context',
+          sourceKindRuntimeContext: 'runtime context',
+          sourceKindSkillCatalog: 'skill catalog',
+          sourceKindModelSelection: 'model selection',
+          sourceKindSystemPrompt: 'system prompt',
+          sourceKindToolRegistry: 'tool registry',
+          sourceKindModel: 'model reply',
+          sourceKindTool: 'tool result',
+          sourceKindOther: 'unlabelled',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -254,6 +292,34 @@ window.__ModuleLoader__.load({
         background: 'transparent',
       },
       chipAccentValue: { color: 'var(--dsw-alias-brand-primary, #2f6feb)' },
+
+      /* ---- source breakdown: one stacked bar, then the legend ---- */
+      sourceBar: {
+        display: 'flex',
+        height: '8px',
+        borderRadius: '999px',
+        overflow: 'hidden',
+        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.10))',
+      },
+      sourceSeg: { height: '100%', minWidth: '2px' },
+      sourceLegend: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: '4px 14px',
+        marginTop: '7px',
+        fontSize: '11.5px',
+        lineHeight: '17px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      sourceKey: { display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' },
+      sourceDot: { width: '8px', height: '8px', borderRadius: '2px', flex: '0 0 auto' },
+      sourceNum: {
+        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+        fontWeight: 600,
+        fontVariantNumeric: 'tabular-nums',
+      },
+      sourceMuted: { color: 'var(--dsw-alias-label-secondary, #5b6472)' },
       dialogBody: {
         flex: '1 1 auto',
         minHeight: 0,
@@ -464,6 +530,112 @@ window.__ModuleLoader__.load({
       return {};
     }
 
+    /*
+     * Why a message is in the request — the question a reader actually asks in
+     * front of a 1078-message payload. The session log already records it: every
+     * message-shaped event carries `data.source.kind` (or `data.message.source`
+     * for assistant/tool messages), so this table only names those kinds.
+     *
+     * The families are what matter, not the individual kinds: a prompt is
+     * mostly "history", plus injections this Turn needed, plus tool traffic.
+     */
+    const SOURCE_KINDS = {
+      user: { key: 'prompt', family: 'prompt' },
+      'user-approval': { key: 'approval', family: 'prompt' },
+      'time-context': { key: 'timeContext', family: 'injected' },
+      'runtime-context': { key: 'runtimeContext', family: 'injected' },
+      'skill-catalog': { key: 'skillCatalog', family: 'injected' },
+      'model-selection': { key: 'modelSelection', family: 'injected' },
+      'system-prompt': { key: 'systemPrompt', family: 'injected' },
+      'tool-registry': { key: 'toolRegistry', family: 'injected' },
+      model: { key: 'model', family: 'model' },
+      tool: { key: 'tool', family: 'tool' },
+    };
+
+    /** The source kind of one log event, or '' when the log does not say. */
+    function sourceKindOf(type, data) {
+      const message = data && data.message && typeof data.message === 'object' ? data.message : null;
+      const source = (message && message.source) || (data && data.source) || null;
+      if (source && typeof source.kind === 'string') return source.kind;
+      return '';
+    }
+
+    /** Which family a source kind belongs to; unknown kinds are 'other'. */
+    function familyOf(kind) {
+      const known = SOURCE_KINDS[kind];
+      return known ? known.family : 'other';
+    }
+
+    /*
+     * Byte size without building the string: the payload is megabytes, and this
+     * runs once per call of a Turn.
+     */
+    function byteLength(value) {
+      if (value === null || value === undefined) return 4;
+      if (typeof value === 'string') return utf8Length(value) + 2;
+      if (typeof value === 'number') return isFinite(value) ? String(value).length : 4;
+      if (typeof value === 'boolean') return value ? 4 : 5;
+      if (Array.isArray(value)) {
+        let total = 2;
+        for (let i = 0; i < value.length; i += 1) total += byteLength(value[i]) + 1;
+        return total;
+      }
+      if (typeof value === 'object') {
+        const keys = Object.keys(value);
+        let total = 2;
+        for (let i = 0; i < keys.length; i += 1) {
+          total += utf8Length('"' + keys[i] + '":') + byteLength(value[keys[i]]) + 1;
+        }
+        return total;
+      }
+      return 0;
+    }
+
+    function utf8Length(text) {
+      let bytes = 0;
+      for (let i = 0; i < text.length; i += 1) {
+        const code = text.charCodeAt(i);
+        if (code < 0x80) bytes += 1;
+        else if (code < 0x800) bytes += 2;
+        else if (code >= 0xd800 && code <= 0xdbff) {
+          bytes += 4;
+          i += 1;
+        } else bytes += 3;
+      }
+      return bytes;
+    }
+
+    /**
+     * Group the messages of one rebuild by source, so the viewer can answer
+     * "why is this request 1078 messages long".
+     *
+     * `items` is the seq-tagged list `buildMessages` folded, filtered down to the
+     * messages it actually kept: an incremental empty record contributes nothing,
+     * so counting it would overstate a family.
+     */
+    function summarizeSources(items) {
+      const families = { prompt: 0, injected: 0, model: 0, tool: 0, other: 0 };
+      const kinds = {};
+      const order = [];
+      for (let i = 0; i < items.length; i += 1) {
+        const entry = items[i];
+        const kind = entry.kind || '';
+        const known = SOURCE_KINDS[kind];
+        const family = known ? known.family : 'other';
+        families[family] += 1;
+        const key = known ? known.key : 'other';
+        if (!kinds[key]) {
+          kinds[key] = { key: key, kind: kind, family: family, count: 0 };
+          order.push(key);
+        }
+        kinds[key].count += 1;
+      }
+      return {
+        counts: families,
+        kinds: order.map((key) => kinds[key]),
+      };
+    }
+
     /** Flatten a window entry list into a seq-ordered array of real (non-transient) events. */
     function collectEvents(entries) {
       const out = [];
@@ -546,6 +718,10 @@ window.__ModuleLoader__.load({
      * before it is history the request merely carried along. The returned
      * `historyEnd` is the index where that boundary falls in `messages`, which is
      * what lets the viewer fold the older block away by default.
+     *
+     * Each kept message also carries `track`, the seq-ordered list of its source
+     * records ({seq, kind, family, byte}), so the viewer can say where every
+     * message came from without rebuilding anything.
      */
     function buildMessages(events, cutSeq, turnStartSeq) {
       const items = [];
@@ -572,6 +748,18 @@ window.__ModuleLoader__.load({
                     : JSON.stringify(data.arguments === undefined ? {} : data.arguments),
               },
             });
+            /* The call belongs to the assistant message it hangs off, so it adds
+               to that message's size rather than becoming one of its own. */
+            const owner = items[items.length - 1];
+            const kind = 'model';
+            if (owner) {
+              owner.track.push({
+                seq: seq,
+                kind: kind,
+                family: 'model',
+                byte: byteLength(data.arguments),
+              });
+            }
           }
           continue;
         }
@@ -604,10 +792,19 @@ window.__ModuleLoader__.load({
           lastAssistant = null;
         }
 
-        items.push({ seq: seq, message: message });
+        const kind = sourceKindOf(type, data);
+        const bytes = byteLength(message.content);
+        items.push({
+          seq: seq,
+          kind: kind,
+          byte: bytes,
+          message: message,
+          track: [{ seq: seq, kind: kind, family: familyOf(kind), byte: bytes }],
+        });
       }
 
       const messages = [];
+      const track = [];
       let historyEnd = boundary < 0 ? 0 : null;
       for (let i = 0; i < items.length; i += 1) {
         const message = items[i].message;
@@ -623,10 +820,13 @@ window.__ModuleLoader__.load({
         }
         if (historyEnd === null && items[i].seq >= boundary) historyEnd = messages.length;
         messages.push(message);
+        track.push(items[i].track);
       }
       return {
         messages: messages,
         historyEnd: historyEnd === null ? messages.length : historyEnd,
+        /* Per-message provenance, aligned with `messages`. */
+        track: track,
       };
     }
 
@@ -805,6 +1005,14 @@ window.__ModuleLoader__.load({
                everything before it. Kept on `meta`, never inside `request`, so
                the payload itself stays byte-for-byte what was sent. */
             historyEnd: built.historyEnd,
+            /* Why the messages are there, and which of them are new this Turn. */
+            sources: summarizeSources(built.track.map(firstRecord)),
+            freshSources: summarizeSources(
+              built.track.slice(built.historyEnd).map(function (items) {
+                return firstRecord(items, turnStartSeq);
+              }),
+            ),
+            freshBytes: freshBytes(built.track.slice(built.historyEnd), turnStartSeq),
             tools: tools.length,
             usage: response && response.usage ? normalizeUsage(response.usage) : null,
           },
@@ -812,6 +1020,36 @@ window.__ModuleLoader__.load({
       }
 
       return { turn: turnNumber, calls: calls };
+    }
+
+    /**
+     * One message can be assembled from several records (an assistant reply plus
+     * the `tool/call` entries hanging off it). For the source summary the first
+     * record decides the family, and `onlyFrom` narrows it to the records written
+     * by the current Turn.
+     */
+    function firstRecord(items, onlyFrom) {
+      if (!Array.isArray(items) || !items.length) return { kind: '', family: 'other', byte: 0, seq: -1 };
+      const usable =
+        typeof onlyFrom === 'number'
+          ? items.filter(function (item) {
+              return item.seq >= onlyFrom;
+            })
+          : items;
+      return usable.length ? usable[0] : { kind: '', family: 'other', byte: 0, seq: -1 };
+    }
+
+    /** Bytes this Turn wrote into the request (the rest is carried history). */
+    function freshBytes(track, onlyFrom) {
+      let total = 0;
+      for (let i = 0; i < track.length; i += 1) {
+        const items = track[i];
+        for (let j = 0; j < items.length; j += 1) {
+          if (typeof onlyFrom === 'number' && items[j].seq < onlyFrom) continue;
+          total += items[j].byte || 0;
+        }
+      }
+      return total;
     }
 
     /** Locate the assistant message an action row belongs to. */
@@ -843,6 +1081,8 @@ window.__ModuleLoader__.load({
         collectEvents: collectEvents,
         buildMessages: buildMessages,
         buildTurnCalls: buildTurnCalls,
+        summarizeSources: summarizeSources,
+        byteLength: byteLength,
         locateMessage: locateMessage,
         callIndexForStep: callIndexForStep,
         DialogBody: DialogBody,
@@ -995,6 +1235,12 @@ window.__ModuleLoader__.load({
            finds them without reading a single role name. */
         currentBorder: '#2f6fed',
         currentBg: 'rgba(47,111,237,0.07)',
+        /* Source families, in the order the bar stacks them. */
+        famPrompt: '#2f6fed',
+        famInjected: '#b26a00',
+        famModel: '#8250df',
+        famTool: '#1a7f37',
+        famOther: '#8c959f',
       },
       dark: {
         key: '#d2a8ff',
@@ -1010,6 +1256,11 @@ window.__ModuleLoader__.load({
         scThumbActive: '#5a8cff',
         currentBorder: '#5a8cff',
         currentBg: 'rgba(90,140,255,0.13)',
+        famPrompt: '#5a8cff',
+        famInjected: '#d29922',
+        famModel: '#d2a8ff',
+        famTool: '#3fb950',
+        famOther: '#6e7681',
       },
     };
 
@@ -1297,6 +1548,123 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * "Why is this request this long?" — one stacked bar plus a legend.
+     *
+     * Shares are message bytes rather than tokens: the log records text, the
+     * provider reports tokens, and mapping one to the other would be a guess. The
+     * bar answers "what is taking up room" honestly; the token chips next to it
+     * remain the authoritative cost.
+     */
+    function SourcePanel(props) {
+      const sources = props.sources;
+      const fresh = props.fresh;
+      const freshBytes = props.freshBytes;
+      const pal = props.pal || PALETTES.light;
+
+      if (!sources || !sources.counts) return null;
+
+      const totalCount =
+        sources.counts.prompt + sources.counts.injected + sources.counts.model + sources.counts.tool + sources.counts.other;
+      if (!totalCount) return null;
+
+      const label = {
+        prompt: TEXT.sourceFamilyPrompt,
+        injected: TEXT.sourceFamilyInjected,
+        model: TEXT.sourceFamilyModel,
+        tool: TEXT.sourceFamilyTool,
+        other: TEXT.sourceFamilyOther,
+      };
+      const colour = {
+        prompt: pal.famPrompt,
+        injected: pal.famInjected,
+        model: pal.famModel,
+        tool: pal.famTool,
+        other: pal.famOther,
+      };
+      /* Per-kind wording, so the legend can say "时间上下文 33" instead of the
+         coarser family name once the bar is narrowed to one family. */
+      const kindText = {
+        user: TEXT.sourceKindUser,
+        approval: TEXT.sourceKindApproval,
+        timeContext: TEXT.sourceKindTimeContext,
+        runtimeContext: TEXT.sourceKindRuntimeContext,
+        skillCatalog: TEXT.sourceKindSkillCatalog,
+        modelSelection: TEXT.sourceKindModelSelection,
+        systemPrompt: TEXT.sourceKindSystemPrompt,
+        toolRegistry: TEXT.sourceKindToolRegistry,
+        model: TEXT.sourceKindModel,
+        tool: TEXT.sourceKindTool,
+        other: TEXT.sourceKindOther,
+      };
+      const order = ['prompt', 'injected', 'model', 'tool', 'other'];
+
+      const segments = order
+        .filter((key) => sources.counts[key] > 0)
+        .map((key) =>
+          h('div', {
+            key: key,
+            style: Object.assign({}, STYLE.sourceSeg, {
+              flex: String(sources.counts[key]) + ' 1 0',
+              background: colour[key],
+            }),
+            title: label[key] + ' · ' + sources.counts[key],
+          }),
+        );
+
+      const legend = order
+        .filter((key) => sources.counts[key] > 0)
+        .map((key) => {
+          /* One family's exact kinds, so "自动注入 50" can be read down to
+             "时间上下文 33 · 运行时上下文 7". */
+          const members = (sources.kinds || [])
+            .filter((item) => item.family === key)
+            .map((item) => kindText[item.key] || kindText.other)
+            .join(' · ');
+          return h(
+            'span',
+            {
+              key: key,
+              style: STYLE.sourceKey,
+              title: sources.counts[key] + ' ' + label[key] + (members ? ' — ' + members : ''),
+            },
+            h('span', { key: 'd', style: Object.assign({}, STYLE.sourceDot, { background: colour[key] }) }),
+            h('span', { key: 'l' }, label[key]),
+            h('span', { key: 'n', style: STYLE.sourceNum }, formatExact(sources.counts[key])),
+            members ? h('span', { key: 'k', style: STYLE.sourceMuted }, '· ' + members) : null,
+          );
+        });
+
+      /* What this Turn itself wrote: the number that makes a growing context
+         legible (a Turn that adds 150 messages explains itself instantly). */
+      const freshCount =
+        typeof fresh === 'number'
+          ? fresh
+          : fresh && fresh.counts
+            ? fresh.counts.prompt + fresh.counts.injected + fresh.counts.model + fresh.counts.tool + fresh.counts.other
+            : 0;
+      if (freshCount > 0) {
+        legend.push(
+          h(
+            'span',
+            { key: 'fresh', style: Object.assign({}, STYLE.sourceKey, { marginLeft: 'auto' }), title: TEXT.sourceFreshTitle },
+            h('span', { key: 'l' }, TEXT.sourceFresh),
+            h('span', { key: 'n', style: Object.assign({}, STYLE.sourceNum, { color: pal.famPrompt }) }, formatExact(freshCount)),
+            typeof freshBytes === 'number' && freshBytes > 0
+              ? h('span', { key: 'b', style: STYLE.sourceMuted }, '· ' + formatBytes(freshBytes))
+              : null,
+          ),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'dsh-pl-sources', title: TEXT.sourceTitle },
+        h('div', { key: 'bar', style: STYLE.sourceBar }, segments),
+        h('div', { key: 'legend', style: STYLE.sourceLegend }, legend),
+      );
+    }
+
     // ------------------------------------------------------------ dialog body
 
     function DialogBody(props) {
@@ -1522,6 +1890,15 @@ window.__ModuleLoader__.load({
         ),
         h('div', { key: 'row-meta', style: STYLE.chips }, metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
+        call
+          ? h(SourcePanel, {
+              key: 'row-sources',
+              sources: meta.sources,
+              fresh: meta.messages - meta.historyEnd,
+              freshBytes: meta.freshBytes,
+              pal: pal,
+            })
+          : null,
       );
 
       /* Tabs while they still fit; a step list beyond TAB_LIMIT. */
@@ -1668,7 +2045,7 @@ window.__ModuleLoader__.load({
 
       const body = h(
         'div',
-        { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody },
+        { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody, title: TEXT.railTitle },
         call
           ? h(JsonNode, {
               key: mode + ':' + index,

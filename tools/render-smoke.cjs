@@ -86,8 +86,17 @@ function render(node, sink) {
     render(node.type(node.props), sink);
     return;
   }
+  /* The source bar's segments carry no class of their own; count its children. */
+  if (node.type === 'div' && node.props && node.props.title === undefined
+      && Array.isArray(node.props.children) && node.props.children.length > 0
+      && node.props.children.every((c) => c && c.type === 'div' && c.props && typeof c.props.title === 'string'
+        && /·\s*\d+$/.test(c.props.title))) {
+    sink.barSegs = node.props.children.length;
+  }
   const className = node.props && node.props.className;
-  if (typeof className === 'string') sink.classes.push(className);
+  if (typeof className === 'string') {
+    sink.classes.push(className);
+  }
   sink.tags.push(String(node.type));
   const siblings = node.props.children;
   const seen = new Set();
@@ -109,7 +118,7 @@ function walk(element) {
 
 /* ---------------------------------------------------------- payload fixtures */
 
-function makeCall(index, step, messageCount, tokens) {
+function makeCall(index, step, messageCount, tokens, sources) {
   return {
     index,
     step,
@@ -118,8 +127,14 @@ function makeCall(index, step, messageCount, tokens) {
       step,
       model: 'vc-ds/deepseek-v4.1-flash',
       messages: messageCount,
+      historyEnd: sources ? messageCount - 2 : 0,
       tools: 52,
       reason: index === 1 ? 'initial' : 'resume',
+      sources: sources || null,
+      freshSources: sources
+        ? { counts: { prompt: 1, injected: 1, model: 0, tool: 0, other: 0 }, kinds: [] }
+        : null,
+      freshBytes: sources ? 2048 : 0,
       usage: { input: tokens, cache: 0, output: Math.round(tokens / 10), total: tokens, hitRate: 0 },
     },
     request: {
@@ -263,11 +278,34 @@ expect(splitSpaced.includes('2'), 'the message produced by this turn lost its ar
 expect(!one.text.join('').includes('历史消息'), 'history group rendered without a turn boundary');
 expect(!one.text.join('').includes('earlier messages'), 'history group rendered without a turn boundary');
 
+/* i) source breakdown: the bar, the families, the fresh marker, and no bar
+      when the log does not say where messages came from. */
+const withSources = makeCall(1, 5, 5, 100, {
+  counts: { prompt: 1, injected: 3, model: 40, tool: 41, other: 0 },
+  kinds: [
+    { key: 'user', kind: 'user', family: 'prompt', count: 1 },
+    { key: 'timeContext', kind: 'time-context', family: 'injected', count: 2 },
+    { key: 'runtimeContext', kind: 'runtime-context', family: 'injected', count: 1 },
+    { key: 'model', kind: 'model', family: 'model', count: 40 },
+    { key: 'tool', kind: 'tool', family: 'tool', count: 41 },
+  ],
+});
+const sourced = walk(DialogBody({ payload: payload([withSources]) }));
+const sourcedText = sourced.text.join(' ');
+expect(sourced.classes.some((c) => c.split(/\s+/).includes('dsh-pl-sources')), 'source panel not rendered');
+expect(/你的输入|your prompt/.test(sourcedText), 'prompt family missing from the legend');
+expect(/自动注入|injected/.test(sourcedText), 'injected family missing from the legend');
+expect(/工具往返|tool round-trips/.test(sourcedText), 'tool family missing from the legend');
+expect(/本轮新增|new this turn/.test(sourcedText), 'fresh-this-turn marker missing');
+/* The bar carries one segment per non-empty family: prompt, injected, model, tool. */
+expect(sourced.barSegs === 4, 'expected 4 bar segments (non-empty families), got ' + sourced.barSegs);
+expect(!one.text.join(' ').match(/你的输入|your prompt/), 'source panel rendered without a summary');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 8 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 9 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);
