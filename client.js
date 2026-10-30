@@ -96,6 +96,14 @@ window.__ModuleLoader__.load({
           sourceKindModel: '模型回复',
           sourceKindTool: '工具结果',
           sourceKindOther: '未标注来源',
+          diffTitle: '相比上一次调用',
+          diffAdded: '新增',
+          diffRemoved: '消失',
+          diffRewritten: '原地改写',
+          diffChanged: '参数变化',
+          diffSame: '与上一次调用完全相同',
+          diffFirst: '本轮第一次调用，没有可比较的上一次',
+          diffPrevTitle: '上一次调用',
         }
       : {
           show: 'Request JSON',
@@ -164,6 +172,14 @@ window.__ModuleLoader__.load({
           sourceKindModel: 'model reply',
           sourceKindTool: 'tool result',
           sourceKindOther: 'unlabelled',
+          diffTitle: 'vs previous call',
+          diffAdded: 'added',
+          diffRemoved: 'gone',
+          diffRewritten: 'rewritten in place',
+          diffChanged: 'params changed',
+          diffSame: 'identical to the previous call',
+          diffFirst: 'first call of this Turn — nothing to compare',
+          diffPrevTitle: 'previous call',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -292,6 +308,69 @@ window.__ModuleLoader__.load({
         background: 'transparent',
       },
       chipAccentValue: { color: 'var(--dsw-alias-brand-primary, #2f6feb)' },
+      chipAdded: {
+        border: '1px solid var(--dsw-alias-success, rgba(46,160,67,0.75))',
+        background: 'transparent',
+      },
+      chipAddedValue: { color: 'var(--dsw-alias-success, #1a7f37)' },
+      chipWarn: {
+        border: '1px solid var(--dsw-alias-warn, rgba(212,140,0,0.75))',
+        background: 'transparent',
+      },
+      chipWarnValue: { color: 'var(--dsw-alias-warn, #9a6700)' },
+
+      /* ---- diff: the appended tail, one line per message ---- */
+      diffBox: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+        padding: '8px 10px',
+        borderRadius: '8px',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
+        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
+      },
+      diffHead: {
+        display: 'flex',
+        alignItems: 'baseline',
+        flexWrap: 'wrap',
+        gap: '8px',
+        fontSize: '12px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      diffList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+        maxHeight: '132px',
+        overflowY: 'auto',
+      },
+      diffRow: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: '8px',
+        fontSize: '12px',
+        lineHeight: '18px',
+        padding: '1px 4px',
+        borderRadius: '4px',
+      },
+      diffRole: {
+        flex: '0 0 auto',
+        minWidth: '68px',
+        fontWeight: 600,
+        fontVariantNumeric: 'tabular-nums',
+      },
+      diffIndex: {
+        flex: '0 0 auto',
+        minWidth: '34px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      diffHeadText: {
+        flex: '1 1 auto',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      },
 
       /* ---- source breakdown: one stacked bar, then the legend ---- */
       sourceBar: {
@@ -989,6 +1068,14 @@ window.__ModuleLoader__.load({
         const tools = Array.isArray(epoch.tools) ? epoch.tools : [];
         request.tools = tools;
 
+        /* A step's request contains every earlier request of the same Turn as a
+           prefix, so the useful question is "what changed since the previous
+           call": the messages appended after it, and anything that got rewritten
+           in place (compaction). Compared against the previous call of the SAME
+           Turn — a Turn boundary is a different conversation, not a diff. */
+        const prev = calls.length ? calls[calls.length - 1] : null;
+        const diff = prev ? diffRequests(prev.request, request) : null;
+
         calls.push({
           index: i + 1,
           request: request,
@@ -1015,6 +1102,7 @@ window.__ModuleLoader__.load({
             freshBytes: freshBytes(built.track.slice(built.historyEnd), turnStartSeq),
             tools: tools.length,
             usage: response && response.usage ? normalizeUsage(response.usage) : null,
+            diff: diff,
           },
         });
       }
@@ -1052,6 +1140,91 @@ window.__ModuleLoader__.load({
       return total;
     }
 
+    /**
+     * What changed between two consecutive requests of the same Turn.
+     *
+     * Within a Turn the payload only ever grows at the tail: the Harness appends
+     * the model's reply and the tool results, then calls again. So the cheap and
+     * exact answer is the longest common prefix — everything after it is new, and
+     * if the previous request is not a prefix of this one, something was rewritten
+     * in place (compaction, a pruned tool result) which the viewer must say out
+     * loud rather than silently mislabel as "appended".
+     */
+    function diffRequests(prev, next) {
+      const before = Array.isArray(prev && prev.messages) ? prev.messages : [];
+      const after = Array.isArray(next && next.messages) ? next.messages : [];
+      const limit = Math.min(before.length, after.length);
+
+      let common = 0;
+      while (common < limit && sameMessage(before[common], after[common])) common += 1;
+
+      /* Text fields outside `messages` (model, sampling controls, tools) — a
+         changed model or a different tool list is the interesting case. */
+      const changed = [];
+      const keys = Object.keys(next || {});
+      for (let i = 0; i < keys.length; i += 1) {
+        const key = keys[i];
+        if (key === 'messages') continue;
+        if (stableJSON(prev ? prev[key] : undefined) !== stableJSON(next[key])) changed.push(key);
+      }
+
+      const added = [];
+      for (let i = common; i < after.length; i += 1) {
+        added.push({ index: i, role: after[i].role, head: headOf(after[i]) });
+      }
+
+      /* Anything the previous request had that this one does not, or that sits
+         before the prefix break, was rewritten rather than appended. */
+      let removed = 0;
+      for (let i = common; i < before.length; i += 1) {
+        if (!sameMessage(before[i], after[i])) removed += 1;
+      }
+
+      return {
+        /* The index where the new tail starts in THIS request. */
+        prefix: common,
+        added: added,
+        removed: removed,
+        rewritten: common < limit && !sameMessage(before[common], after[common]),
+        changed: changed,
+        prevMessages: before.length,
+      };
+    }
+
+    function stableJSON(value) {
+      try {
+        return JSON.stringify(value === undefined ? null : value);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function sameMessage(a, b) {
+      if (a === b) return true;
+      if (!a || !b || a.role !== b.role) return false;
+      return (
+        stableJSON(a.content) === stableJSON(b.content) &&
+        stableJSON(a.tool_calls) === stableJSON(b.tool_calls) &&
+        a.tool_call_id === b.tool_call_id
+      );
+    }
+
+    /** First line of a message's text, for the "what got appended" list. */
+    function headOf(message) {
+      let text = message && message.content;
+      if (Array.isArray(text)) {
+        const parts = [];
+        for (let i = 0; i < text.length; i += 1) {
+          const part = text[i];
+          if (part && typeof part.text === 'string') parts.push(part.text);
+        }
+        text = parts.join(' ');
+      }
+      if (typeof text !== 'string') text = '';
+      const flat = text.replace(/\s+/g, ' ').trim();
+      return flat.length > 96 ? flat.slice(0, 96) + '…' : flat;
+    }
+
     /** Locate the assistant message an action row belongs to. */
     function locateMessage(events, messageId) {
       for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -1081,6 +1254,7 @@ window.__ModuleLoader__.load({
         collectEvents: collectEvents,
         buildMessages: buildMessages,
         buildTurnCalls: buildTurnCalls,
+        diffRequests: diffRequests,
         summarizeSources: summarizeSources,
         byteLength: byteLength,
         locateMessage: locateMessage,
@@ -1549,6 +1723,106 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * "What changed since the previous call?" — one line per appended message,
+     * plus an explicit warning whenever the payload was not merely extended.
+     *
+     * Within a Turn the Harness only appends, so the interesting cases are: the
+     * model's reply and tool results of the previous step showing up at the tail
+     * (expected), a message silently disappearing (compaction), or the sampling
+     * parameters changing between calls. Each of those gets its own chip so the
+     * reader never mistakes one for another.
+     */
+    function DiffPanel(props) {
+      const diff = props.diff;
+      const pal = props.pal || PALETTES.light;
+      if (!diff || typeof diff !== 'object') return null;
+
+      const added = Array.isArray(diff.added) ? diff.added : [];
+      const changed = Array.isArray(diff.changed) ? diff.changed : [];
+
+      const head = [
+        h(
+          'span',
+          { key: 'l', style: STYLE.chipValue, title: TEXT.diffPrevTitle },
+          TEXT.diffTitle + ' ' + (diff.prevMessages || 0) + ' ' + TEXT.messages,
+        ),
+        h(
+          'span',
+          { key: 'a', style: Object.assign({}, STYLE.chip, STYLE.chipAdded) },
+          h('span', { key: 'l', style: STYLE.chipLabel }, TEXT.diffAdded),
+          h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipAddedValue) }, '+' + added.length),
+        ),
+        diff.removed > 0
+          ? h(
+              'span',
+              { key: 'r', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
+              h('span', { key: 'l', style: STYLE.chipLabel }, TEXT.diffRemoved),
+              h(
+                'span',
+                { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) },
+                '-' + diff.removed,
+              ),
+            )
+          : null,
+        diff.rewritten
+          ? h(
+              'span',
+              { key: 'w', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
+              h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) }, TEXT.diffRewritten),
+            )
+          : null,
+        changed.length
+          ? h(
+              'span',
+              { key: 'c', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
+              h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) },
+                TEXT.diffChanged + ': ' + changed.join(', ')),
+            )
+          : null,
+      ];
+
+      const roleColour = {
+        user: pal.famPrompt,
+        system: pal.famInjected,
+        developer: pal.famInjected,
+        assistant: pal.famModel,
+        tool: pal.famTool,
+      };
+
+      const rows = added.map((entry) =>
+        h(
+          'div',
+          { key: 'add-' + entry.index, style: STYLE.diffRow, title: entry.head || undefined },
+          h('span', { key: 'i', style: STYLE.diffIndex }, '+' + entry.index),
+          h(
+            'span',
+            { key: 'r', style: Object.assign({}, STYLE.diffRole, { color: roleColour[entry.role] || pal.punct }) },
+            entry.role,
+          ),
+          h('span', { key: 'h', style: Object.assign({}, STYLE.diffHeadText, { color: pal.text }) }, entry.head || '—'),
+        ),
+      );
+
+      return h(
+        'div',
+        { key: 'diff', style: STYLE.diffBox },
+        h('div', { key: 'head', style: STYLE.diffHead }, head),
+        added.length
+          ? h('div', { key: 'list', style: STYLE.diffList }, rows)
+          : h('div', { key: 'same', style: STYLE.diffHead }, TEXT.diffSame),
+      );
+    }
+
+    /**
+     * The header's diff slot: the first call of a Turn has nothing to compare
+     * against, and saying so is better than showing an empty panel.
+     */
+    function DiffSlot(props) {
+      if (!props.diff) return h('div', { key: 'diff-first', style: STYLE.diffHead }, TEXT.diffFirst);
+      return h(DiffPanel, { key: 'diff', diff: props.diff, pal: props.pal });
+    }
+
+    /**
      * "Why is this request this long?" — one stacked bar plus a legend.
      *
      * Shares are message bytes rather than tokens: the log records text, the
@@ -1890,6 +2164,7 @@ window.__ModuleLoader__.load({
         ),
         h('div', { key: 'row-meta', style: STYLE.chips }, metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
+        call ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
         call
           ? h(SourcePanel, {
               key: 'row-sources',

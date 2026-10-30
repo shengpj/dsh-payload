@@ -218,6 +218,58 @@ for (const item of sourceProblems.slice(0, 10)) console.log('  ' + item);
 if (!sourceProblems.length)
   console.log('  every message is classified exactly once; fresh = messages - historyEnd');
 
+/* Adjacent-call diff: the first call of a Turn has nothing to compare against,
+   and a later call's diff must reconcile with the two message arrays — the
+   unchanged prefix plus what was appended (and removed) is the whole story. */
+const diffProblems = [];
+let diffCalls = 0;
+let rewrittenCalls = 0;
+for (const start of flat.filter((event) => event.type === 'turn/start')) {
+  const turn = start.data.turn;
+  const built = api.buildTurnCalls(flat, turn);
+  if (!built) continue;
+  for (let i = 0; i < built.calls.length; i += 1) {
+    const item = built.calls[i];
+    const diff = item.meta && item.meta.diff;
+    if (i === 0) {
+      if (diff) diffProblems.push('Turn ' + turn + ' #1: first call should have no diff');
+      continue;
+    }
+    if (!diff) {
+      diffProblems.push('Turn ' + turn + ' #' + item.index + ': missing diff');
+      continue;
+    }
+    diffCalls += 1;
+    const prev = built.calls[i - 1].request.messages.length;
+    if (diff.prevMessages !== prev)
+      diffProblems.push('Turn ' + turn + ' #' + item.index + ': prevMessages ' + diff.prevMessages + ' != ' + prev);
+    if (!(diff.prefix >= 0 && diff.prefix <= Math.min(prev, item.meta.messages)))
+      diffProblems.push('Turn ' + turn + ' #' + item.index + ': prefix ' + diff.prefix + ' out of range');
+    if (diff.prefix + diff.added.length !== item.meta.messages)
+      diffProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': prefix+added ' + (diff.prefix + diff.added.length) + ' != messages ' + item.meta.messages,
+      );
+    if (diff.rewritten) rewrittenCalls += 1;
+    /* Inside one Turn the request only grows at the tail unless something was
+       compacted, so a rewrite must be reported as such, not as appended. */
+    if (!diff.rewritten && diff.removed > 0)
+      diffProblems.push('Turn ' + turn + ' #' + item.index + ': removed ' + diff.removed + ' without a rewrite');
+    for (const entry of diff.added) {
+      const message = item.request.messages[entry.index];
+      if (!message) diffProblems.push('Turn ' + turn + ' #' + item.index + ': added index ' + entry.index + ' out of range');
+      else if (message.role !== entry.role)
+        diffProblems.push('Turn ' + turn + ' #' + item.index + ': added role ' + entry.role + ' != ' + message.role);
+    }
+  }
+}
+
+console.log('\n=== adjacent-call diff: ' + diffCalls + ' call(s), ' + diffProblems.length + ' problem(s) ===');
+for (const item of diffProblems.slice(0, 10)) console.log('  ' + item);
+if (!diffProblems.length)
+  console.log(
+    '  prefix + added = messages on every non-first call; rewrites counted: ' + rewrittenCalls,
+  );
+
 console.log(
   '\n=== turn/current split: ' + splitProblems.length + ' problem(s) ===',
 );

@@ -136,6 +136,20 @@ function makeCall(index, step, messageCount, tokens, sources) {
         : null,
       freshBytes: sources ? 2048 : 0,
       usage: { input: tokens, cache: 0, output: Math.round(tokens / 10), total: tokens, hitRate: 0 },
+      diff:
+        index === 1
+          ? null
+          : {
+              prefix: messageCount - 2,
+              added: [
+                { index: messageCount - 2, role: 'assistant', head: 'I will read it.' },
+                { index: messageCount - 1, role: 'tool', head: 'file contents…' },
+              ],
+              removed: 0,
+              rewritten: false,
+              changed: [],
+              prevMessages: messageCount - 2,
+            },
     },
     request: {
       model: 'deepseek-v4.1-flash',
@@ -150,10 +164,10 @@ function makeCall(index, step, messageCount, tokens, sources) {
   };
 }
 
-function payload(calls) {
+function payload(calls, selected) {
   return {
     scheme: 'dark',
-    selectedIndex: 0,
+    selectedIndex: selected || 0,
     data: { turn: 24, calls },
   };
 }
@@ -301,11 +315,40 @@ expect(/本轮新增|new this turn/.test(sourcedText), 'fresh-this-turn marker m
 expect(sourced.barSegs === 4, 'expected 4 bar segments (non-empty families), got ' + sourced.barSegs);
 expect(!one.text.join(' ').match(/你的输入|your prompt/), 'source panel rendered without a summary');
 
+/* j) diff: the first call says there is nothing to compare, later calls list
+      what got appended, and a rewritten payload is called out as such. */
+const firstCall = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100)]) }));
+expect(
+  /本轮第一次调用|first call of this Turn/.test(firstCall.text.join(' ')),
+  'first call should say there is no previous call to compare',
+);
+
+const diffed = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200)], 1) }));
+const diffedText = diffed.text.join(' ');
+expect(/新增|added/.test(diffedText), 'added chip missing from the diff panel');
+expect(diffedText.includes('+2'), 'expected +2 added messages, got ' + diffedText.slice(0, 200));
+expect(diffedText.includes('I will read it.'), 'appended assistant head missing');
+expect(diffedText.includes('file contents'), 'appended tool head missing');
+expect(!/消失|gone/.test(diffedText), 'removed chip should not appear when nothing was removed');
+
+/* A rewrite must be surfaced, not silently reported as "appended". */
+const rewrittenCall = makeCall(2, 6, 9, 200);
+rewrittenCall.meta.diff = Object.assign({}, rewrittenCall.meta.diff, {
+  removed: 3,
+  rewritten: true,
+  changed: ['model'],
+});
+const rewritten = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), rewrittenCall], 1) }));
+const rewrittenText = rewritten.text.join(' ');
+expect(/原地改写|rewritten in place/.test(rewrittenText), 'rewrite not reported');
+expect(/消失|gone/.test(rewrittenText), 'removed count not reported');
+expect(/参数变化|params changed/.test(rewrittenText), 'changed params not reported');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 9 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 10 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

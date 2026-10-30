@@ -15,6 +15,7 @@
 - **可折叠 JSON**：对象/数组默认折叠、标量直接展示，每个节点都能单独展开或收起，另有「全部展开 / 全部收起」；长字符串截断显示，复制时仍是原值。
 - **历史与本轮分开**：`messages` 里本轮（这条回复所属的 Turn）新产生的消息默认展开、靠一条品牌色竖线标出，更早的历史合并成 `历史消息 (n)` 一行折叠起来，点一下就能展开；数组标题上同时给出 `本轮 n` / `历史 n` 两个计数。折叠只是显示层，下标仍是数组里的真实下标，复制出来的 JSON 一字不差。
 - **token 用量**：顶部三层信息，第二行是调用元信息（`#k/N`、model、消息条数、工具数、触发原因），第三行是 token 拆解（输入 / 缓存与命中率 / 输出 / 合计 / 本轮合计），全部来自 provider 上报的真实数值。
+- **相邻调用 diff**：同一轮里第 2 次及以后的调用，弹框会多一行「相比上一次调用」——`+n` 列出这次新增的消息（角色、在数组里的下标、开头 96 个字符），并单独标出 `-n`（有消息消失，通常意味着发生了什么压缩）、「原地改写」和「参数变化」（换了 model 或采样参数）。一轮的第一次调用会直接写「本轮第一次调用，没有可比较的上一次」。
 - **上下文来源占比**：弹框底部把这次请求的 `messages` 按来源分成五类并给出条数与占比——你的输入、harness 自动注入（时间上下文、运行时上下文、技能目录、系统提示…）、模型回复、工具往返，每类下面再列出具体的小类；旁边标出「本轮新增」占多少，用来回答「上下文为什么涨这么快」。占比按**消息字节**算，不是 token。
 - **复制**：复制当前那次调用，或「复制全部调用」导出成请求数组。
 - **长文档导航**：JSON 面板右侧是常驻加宽的滚动条，可直接拖拽跳转（覆盖层滚动条太细、会自动淡出）；头部另有「↑ 顶部 / ↓ 末尾」按钮，切换调用或展开/收起后自动回到顶部。
@@ -114,7 +115,7 @@ index.js                     Host 半边（空 apply，只为让 bundle 有个 h
 client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
 cordis.patch.yml             装进 profile 时插入的条目
 tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射与本轮/历史切分
-tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 9 个场景
+tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 10 个场景
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -127,11 +128,11 @@ market/index.json                  插件市场索引（format 1）
 ```bash
 node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
 node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
-node tools/render-smoke.cjs                       # 渲染：9 个场景
+node tools/render-smoke.cjs                       # 渲染：10 个场景
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 
-`verify-against-session.cjs` 除了对账每个 Turn 的调用次数与 token 总量，还会检查两组不变量：本轮/历史切分（`historyEnd` 落在 `0..messages` 之间、随 step 前进只增不减、且不少于上一轮最后一次调用已携带的消息数），以及来源分类（每条消息恰好归类一次，且各类之和等于 `messages.length`）。
+`verify-against-session.cjs` 除了对账每个 Turn 的调用次数与 token 总量，还会检查三组不变量：本轮/历史切分（`historyEnd` 落在 `0..messages` 之间、随 step 前进只增不减、且不少于上一轮最后一次调用已携带的消息数）、来源分类（每条消息恰好归类一次，且各类之和等于 `messages.length`）、以及相邻调用 diff（首调用没有 diff；其余调用满足 `prefix + added = messages`，`removed > 0` 时必须同时标记为改写）。
 
 数据管线的核心是五步：定位消息所属 Turn → 翻完窗口 → 逐个 `step/start` 切分 → 每个切点折叠出 `messages` 并继承最近一条 `request/header` → 按 `meta.step` 选中目标调用。踩过的坑（slot 组件里不能用注入式 hook、`request/header` 稀疏、空 `content: []` 是增量标记、`listTokens` 不是全量 token 表等）都记在 [docs/notes.md](docs/notes.md)。
 
