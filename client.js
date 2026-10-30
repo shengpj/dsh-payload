@@ -860,17 +860,23 @@ window.__ModuleLoader__.load({
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
       /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
-         is thin and fades out, which makes dragging to the end a guessing game. */
-      '.dsh-pl-scroll{scrollbar-width:thin;',
-      'scrollbar-color:var(--dsw-alias-border-l2,rgba(127,127,127,.55)) transparent}',
-      '.dsh-pl-scroll::-webkit-scrollbar{width:12px;height:12px}',
-      '.dsh-pl-scroll::-webkit-scrollbar-track{background:transparent}',
+         is thin and fades out, which makes dragging to the end a guessing game.
+         The rail keeps a visible track, and the thumb uses label colours (not the
+         near-invisible border tint) so it reads as a scrollbar at a glance. */
+      '.dsh-pl-scroll{scrollbar-gutter:stable;scrollbar-width:auto;',
+      'scrollbar-color:var(--dsw-alias-label-tertiary,#81858c) var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12))}',
+      '.dsh-pl-scroll::-webkit-scrollbar{width:14px;height:14px}',
+      '.dsh-pl-scroll::-webkit-scrollbar-track{',
+      'background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12))}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb{',
       'border:3px solid transparent;background-clip:padding-box;border-radius:8px;',
-      'background-color:var(--dsw-alias-border-l2,rgba(127,127,127,.45));',
+      'background-color:var(--dsw-alias-label-tertiary,#81858c);',
       'transition:background-color .12s ease}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb:hover{',
-      'background-color:var(--dsw-alias-label-tertiary,#81858c);',
+      'background-color:var(--dsw-alias-label-secondary,#5b6472);',
+      'border:3px solid transparent;background-clip:padding-box}',
+      '.dsh-pl-scroll::-webkit-scrollbar-thumb:active{',
+      'background-color:var(--dsw-alias-brand-primary,#2f6fed);',
       'border:3px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
     ].join('');
