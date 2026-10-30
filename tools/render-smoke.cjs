@@ -248,11 +248,26 @@ expect(failed.text.join(' ').includes('sessions service unavailable'), 'error st
 
 internals.publishDialog(null);
 
+/* h) a request that knows where its Turn begins: the older messages fold into
+      one group line, and the messages this turn produced keep their real array
+      indices and stay visible. */
+const splitCall = makeCall(1, 5, 5, 100);
+splitCall.meta.historyEnd = 2;
+const split = walk(DialogBody({ payload: payload([splitCall]) }));
+const splitRaw = split.text.join('');
+const splitSpaced = split.text.join(' ');
+expect(/历史消息|earlier messages/.test(splitSpaced), 'folded history group label missing');
+expect(/\(2\)/.test(splitRaw), 'folded group did not report how many messages it hides: ' + splitRaw.slice(0, 120));
+expect(/本轮|this turn/.test(splitSpaced), 'current-turn badge missing');
+expect(splitSpaced.includes('2'), 'the message produced by this turn lost its array index');
+expect(!one.text.join('').includes('历史消息'), 'history group rendered without a turn boundary');
+expect(!one.text.join('').includes('earlier messages'), 'history group rendered without a turn boundary');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 7 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 8 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

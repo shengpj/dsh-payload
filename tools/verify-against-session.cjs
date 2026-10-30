@@ -120,6 +120,8 @@ for (const event of events) {
 
 const counts = {};
 let newest = null;
+let prevTurnMessages = null;
+const splitProblems = [];
 for (const start of flat.filter((event) => event.type === 'turn/start')) {
   const turn = start.data.turn;
   const built = api.buildTurnCalls(flat, turn, undefined, start.seq);
@@ -134,6 +136,29 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
   }
   const expected = logUsage[String(turn)] || 0;
   const verdict = rebuilt === expected ? 'ok' : 'MISMATCH';
+  /* Every request tells the viewer where this Turn's own messages start.
+     Invariants: inside the array, never shrinking as the Turn advances, and
+     never less than what the previous Turn already carried as history. */
+  let previousHistory = -1;
+  for (const item of calls) {
+    const end = item.meta.historyEnd;
+    const total = item.meta.messages;
+    if (typeof end !== 'number' || end < 0 || end > total)
+      splitProblems.push('Turn ' + turn + ' #' + item.index + ': historyEnd ' + end + ' outside 0..' + total);
+    else if (end < previousHistory)
+      splitProblems.push('Turn ' + turn + ' #' + item.index + ': historyEnd ' + end + ' < previous ' + previousHistory);
+    previousHistory = end;
+  }
+  const firstCall = calls[0];
+  if (firstCall && prevTurnMessages !== null && firstCall.meta.historyEnd < prevTurnMessages)
+    splitProblems.push(
+      'Turn ' + turn + ' first call historyEnd ' + firstCall.meta.historyEnd + ' < previous Turn messages ' + prevTurnMessages,
+    );
+  if (sample) prevTurnMessages = sample.meta.messages;
+  const split = firstCall && sample
+    ? '  history: first ' + firstCall.meta.historyEnd + '/' + firstCall.meta.messages +
+      ' last ' + sample.meta.historyEnd + '/' + sample.meta.messages
+    : '';
   console.log(
     'Turn ' + String(turn).padStart(2) + ' -> ' + String(calls.length).padStart(3) + ' call(s)' +
       (sample
@@ -142,10 +167,18 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
           ' model=' + sample.meta.model
         : '') +
       '  tokens=' + rebuilt + ' vs log=' + expected + ' ' + verdict +
-      (missing ? ' (no usage on ' + missing + ' call(s))' : ''),
+      (missing ? ' (no usage on ' + missing + ' call(s))' : '') +
+      split,
   );
   if (calls.length) newest = { turn, call: sample };
 }
+
+console.log(
+  '\n=== turn/current split: ' + splitProblems.length + ' problem(s) ===',
+);
+for (const item of splitProblems.slice(0, 10)) console.log('  ' + item);
+if (!splitProblems.length)
+  console.log('  historyEnd stays inside messages, never shrinks, and carries the previous Turn');
 
 if (newest) {
   console.log('\n=== Turn ' + newest.turn + ' last call: request keys ===');

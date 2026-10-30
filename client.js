@@ -61,6 +61,13 @@ window.__ModuleLoader__.load({
             '会话日志里这次请求携带的历史条数。实际发出的内容会先经上下文压缩，故条数通常大于模型真正读到的量。',
           compressNote:
             '条数与「请求体」来自会话日志；实际发出的内容会先经上下文压缩折叠，token 用量以「输入 + 缓存」为准。',
+          history: '历史',
+          currentTurn: '本轮',
+          historyGroup: '历史消息',
+          folded: '已折叠',
+          historyTitle:
+            '这些消息产生于更早的轮次，默认折叠；展开后仍是数组里的真实下标。',
+          currentTitle: '本轮对话（含本轮注入的上下文与工具往返）新产生的消息。',
           callPrefix: '第 ',
           callSuffix: ' 次调用',
           reasonLabel: '触发原因',
@@ -103,11 +110,21 @@ window.__ModuleLoader__.load({
             'History entries this request carried in the session log. The request is compressed before it is sent, so this is usually larger than what the model read.',
           compressNote:
             'Counts and body size come from the session log; the payload is compressed before sending, so trust input + cached for tokens.',
+          history: 'history',
+          currentTurn: 'this turn',
+          historyGroup: 'earlier messages',
+          folded: 'folded',
+          historyTitle:
+            'Produced in earlier turns, folded by default; expanding keeps the real array indices.',
+          currentTitle: 'Messages produced in this turn (injected context and tool round-trips included).',
           callPrefix: 'Call ',
           callSuffix: '',
           reasonLabel: 'reason',
           expandAll: 'Expand all',
           collapseAll: 'Collapse all',
+          toTop: 'Top',
+          toEnd: 'End',
+          railTitle: 'Drag the rail to jump anywhere in the payload',
           close: 'Close',
         };
 
@@ -267,6 +284,39 @@ window.__ModuleLoader__.load({
         borderLeft: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))',
         marginLeft: '6px',
         paddingLeft: '10px',
+      },
+      /* Messages produced in the inspected turn: the array's own guide line turns
+         into an accent rail for them, continuous across consecutive messages.
+         The negative margin + matching padding keep the text on the same x, so
+         current rows stay aligned with the folded history block above. */
+      jsonCurrent: {
+        borderLeft: '2px solid transparent',
+        marginLeft: '-10px',
+        paddingLeft: '10px',
+      },
+      /* The "1838 items · history 1814 · this turn 24" summary on the array head. */
+      jsonBadge: {
+        display: 'inline-block',
+        marginLeft: '8px',
+        padding: '0 6px',
+        border: '1px solid transparent',
+        borderRadius: '999px',
+        fontSize: '11.5px',
+        lineHeight: '16px',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      jsonBadgeMuted: {
+        display: 'inline-block',
+        marginLeft: '6px',
+        fontSize: '11.5px',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      /* Folded history header: reads as a label, never as a JSON element. */
+      jsonFoldedHead: {
+        margin: '3px 0',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.07))',
       },
 
       tabs: {
@@ -487,9 +537,19 @@ window.__ModuleLoader__.load({
       return true;
     }
 
-    /** Fold the surface log up to `cutSeq` into the message array of one request. */
-    function buildMessages(events, cutSeq) {
+    /**
+     * Fold the surface log up to `cutSeq` into the message array of one request.
+     *
+     * `turnStartSeq` is the seq that opened the Turn being inspected: everything
+     * at or after it was produced by this Turn (the user message, the context
+     * injected for it, and every assistant/tool message so far), everything
+     * before it is history the request merely carried along. The returned
+     * `historyEnd` is the index where that boundary falls in `messages`, which is
+     * what lets the viewer fold the older block away by default.
+     */
+    function buildMessages(events, cutSeq, turnStartSeq) {
       const items = [];
+      const boundary = typeof turnStartSeq === 'number' && turnStartSeq >= 0 ? turnStartSeq : -1;
       let lastAssistant = null;
 
       for (let i = 0; i < events.length; i += 1) {
@@ -548,6 +608,7 @@ window.__ModuleLoader__.load({
       }
 
       const messages = [];
+      let historyEnd = boundary < 0 ? 0 : null;
       for (let i = 0; i < items.length; i += 1) {
         const message = items[i].message;
         if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length === 0) {
@@ -560,9 +621,13 @@ window.__ModuleLoader__.load({
           const text = message.content;
           if (typeof text !== 'string' || text.trim() === '') continue;
         }
+        if (historyEnd === null && items[i].seq >= boundary) historyEnd = messages.length;
         messages.push(message);
       }
-      return messages;
+      return {
+        messages: messages,
+        historyEnd: historyEnd === null ? messages.length : historyEnd,
+      };
     }
 
     /**
@@ -719,7 +784,8 @@ window.__ModuleLoader__.load({
           request[key] = config[key];
         }
 
-        request.messages = buildMessages(events, cutSeq);
+        const built = buildMessages(events, cutSeq, turnStartSeq);
+        request.messages = built.messages;
         const tools = Array.isArray(epoch.tools) ? epoch.tools : [];
         request.tools = tools;
 
@@ -735,6 +801,10 @@ window.__ModuleLoader__.load({
             model: model,
             provider: provider,
             messages: request.messages.length,
+            /* Index where this Turn's own messages start; the viewer folds
+               everything before it. Kept on `meta`, never inside `request`, so
+               the payload itself stays byte-for-byte what was sent. */
+            historyEnd: built.historyEnd,
             tools: tools.length,
             usage: response && response.usage ? normalizeUsage(response.usage) : null,
           },
@@ -921,6 +991,10 @@ window.__ModuleLoader__.load({
         scThumb: 'rgba(15,23,42,0.46)',
         scThumbHover: 'rgba(15,23,42,0.68)',
         scThumbActive: '#2f6fed',
+        /* Accent for messages produced in the turn being inspected, so the eye
+           finds them without reading a single role name. */
+        currentBorder: '#2f6fed',
+        currentBg: 'rgba(47,111,237,0.07)',
       },
       dark: {
         key: '#d2a8ff',
@@ -934,6 +1008,8 @@ window.__ModuleLoader__.load({
         scThumb: 'rgba(255,255,255,0.42)',
         scThumbHover: 'rgba(255,255,255,0.66)',
         scThumbActive: '#5a8cff',
+        currentBorder: '#5a8cff',
+        currentBg: 'rgba(90,140,255,0.13)',
       },
     };
 
@@ -1023,9 +1099,71 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The older part of a `messages` array, folded into one line. Folding is pure
+     * presentation: the children keep their real array indices, so expanding the
+     * group — or copying the payload — never changes what was actually sent.
+     */
+    function JsonHistoryGroup(props) {
+      const depth = props.depth;
+      const items = props.items;
+      const offset = props.offset || 0;
+      const pal = props.pal || PALETTES.light;
+      const mode = props.mode;
+      const indentation = { paddingLeft: depth * 14 + 'px' };
+      const [open, setOpen] = React.useState(mode === 'all');
+
+      const head = h(
+        'div',
+        {
+          style: Object.assign({}, STYLE.jsonLine, STYLE.jsonClickable, STYLE.jsonFoldedHead, indentation),
+          onClick: () => setOpen(!open),
+          title: TEXT.historyTitle,
+        },
+        h(
+          'span',
+          { key: 't', style: { display: 'inline-block', width: '14px', color: pal.toggle, fontWeight: 700 } },
+          open ? '▾' : '▸',
+        ),
+        h('span', { key: 'l', style: { color: pal.key, fontWeight: 600 } }, TEXT.historyGroup),
+        h('span', { key: 'n', style: { color: pal.punct } }, ' (' + items.length + ')'),
+        open
+          ? null
+          : h('span', { key: 'f', style: { marginLeft: '6px', color: pal.nil, fontSize: '11.5px' } }, TEXT.folded),
+      );
+
+      if (!open) return head;
+
+      return h(
+        'div',
+        { style: STYLE.jsonNode },
+        head,
+        h(
+          'div',
+          { key: 'c', style: STYLE.jsonGuide },
+          items.map((item, index) =>
+            h(JsonNode, {
+              key: offset + index,
+              name: String(offset + index),
+              value: item,
+              depth: depth + 1,
+              mode: mode,
+              pal: pal,
+            }),
+          ),
+        ),
+      );
+    }
+
+    /**
      * A collapsible JSON node. Children are only created while the node is
      * open, which is what keeps a 500-message `messages` array cheap: the array
      * renders one collapsed line per message, not the whole tree.
+     *
+     * When a `messages` array is told where this Turn begins
+     * (`messagesHistoryEnd`), the older messages collapse into one
+     * `JsonHistoryGroup` line and the messages this turn produced keep their
+     * real indices but sit on a tinted rail, so current content is visible
+     * without unfolding anything.
      */
     function JsonNode(props) {
       const name = props.name;
@@ -1036,6 +1174,20 @@ window.__ModuleLoader__.load({
       const isArray = Array.isArray(value);
       const isContainer = value !== null && typeof value === 'object';
       const indentation = { paddingLeft: depth * 14 + 'px' };
+      const split = isArray && name === 'messages' && typeof props.messagesHistoryEnd === 'number';
+      const historyEnd = split ? Math.max(0, Math.min(props.messagesHistoryEnd, value.length)) : 0;
+      const band =
+        props.current === true
+          ? Object.assign({}, STYLE.jsonCurrent, {
+              borderLeftColor: pal.currentBorder,
+              background: pal.currentBg,
+            })
+          : null;
+      const wrap = (style, node) => (style ? h('div', { style: style }, node) : node);
+      /* Forwarded down to the `messages` array, which lives one level below the
+         request root. */
+      const childProps =
+        typeof props.messagesHistoryEnd === 'number' ? { messagesHistoryEnd: props.messagesHistoryEnd } : null;
 
       const [open, setOpen] = React.useState(
         isContainer ? (mode === 'all' ? depth <= EXPAND_ALL_DEPTH : mode === 'none' ? false : depth < 2) : false,
@@ -1045,12 +1197,15 @@ window.__ModuleLoader__.load({
       const colon = label ? h('span', { key: 'c', style: { color: pal.punct } }, ': ') : null;
 
       if (!isContainer) {
-        return h(
-          'div',
-          { style: Object.assign({}, STYLE.jsonLine, indentation) },
-          label,
-          colon,
-          h('span', { key: 'v', style: valueStyle(value, pal) }, literalOf(value)),
+        return wrap(
+          band,
+          h(
+            'div',
+            { style: Object.assign({}, STYLE.jsonLine, indentation) },
+            label,
+            colon,
+            h('span', { key: 'v', style: valueStyle(value, pal) }, literalOf(value)),
+          ),
         );
       }
 
@@ -1067,28 +1222,77 @@ window.__ModuleLoader__.load({
         colon,
         h('span', { key: 'b', style: { color: pal.punct } }, isArray ? '[' : '{'),
         open ? null : h('span', { key: 'n', style: { color: pal.punct, fontStyle: 'italic' } }, ' ' + size + (isArray ? ' items' : ' keys') + ' '),
+        split
+          ? h(
+              'span',
+              {
+                key: 'cur',
+                style: Object.assign({}, STYLE.jsonBadge, {
+                  color: pal.currentBorder,
+                  borderColor: pal.currentBorder,
+                  background: pal.currentBg,
+                }),
+              },
+              TEXT.currentTurn + ' ' + (value.length - historyEnd),
+            )
+          : null,
+        split && historyEnd > 0
+          ? h('span', { key: 'his', style: Object.assign({}, STYLE.jsonBadgeMuted, { color: pal.punct }) }, TEXT.history + ' ' + historyEnd)
+          : null,
         open ? null : h('span', { key: 'e', style: { color: pal.punct } }, isArray ? ']' : '}'),
       );
 
-      if (!open) return head;
+      if (!open) return wrap(band, head);
 
-      const children = isArray
-        ? value.map((item, index) =>
-            h(JsonNode, { key: index, name: String(index), value: item, depth: depth + 1, mode: mode, pal: pal }),
-          )
-        : Object.keys(value).map((key) =>
-            h(JsonNode, { key: key, name: key, value: value[key], depth: depth + 1, mode: mode, pal: pal }),
-          );
+      let children;
+      if (isArray && split && historyEnd > 0) {
+        children = [
+          h(JsonHistoryGroup, {
+            key: 'history',
+            items: value.slice(0, historyEnd),
+            offset: 0,
+            depth: depth + 1,
+            mode: mode,
+            pal: pal,
+          }),
+        ].concat(
+          value.slice(historyEnd).map((item, index) =>
+            h(JsonNode, {
+              key: historyEnd + index,
+              name: String(historyEnd + index),
+              value: item,
+              depth: depth + 1,
+              mode: mode,
+              pal: pal,
+              current: true,
+            }),
+          ),
+        );
+      } else if (isArray) {
+        children = value.map((item, index) =>
+          h(JsonNode, { key: index, name: String(index), value: item, depth: depth + 1, mode: mode, pal: pal }),
+        );
+      } else {
+        children = Object.keys(value).map((key) =>
+          h(
+            JsonNode,
+            Object.assign({ key: key, name: key, value: value[key], depth: depth + 1, mode: mode, pal: pal }, childProps),
+          ),
+        );
+      }
 
-      return h(
-        'div',
-        { style: STYLE.jsonNode },
-        head,
-        h('div', { key: 'c', style: STYLE.jsonGuide }, children),
+      return wrap(
+        band,
         h(
           'div',
-          { key: 'f', style: Object.assign({}, STYLE.jsonLine, indentation) },
-          h('span', { style: { color: pal.punct } }, isArray ? ']' : '}'),
+          { style: STYLE.jsonNode },
+          head,
+          h('div', { key: 'c', style: STYLE.jsonGuide }, children),
+          h(
+            'div',
+            { key: 'f', style: Object.assign({}, STYLE.jsonLine, indentation) },
+            h('span', { style: { color: pal.punct } }, isArray ? ']' : '}'),
+          ),
         ),
       );
     }
@@ -1190,6 +1394,10 @@ window.__ModuleLoader__.load({
       if (meta.model) metaChips.push(chip('model', null, String(meta.model)));
       if (typeof meta.messages === 'number')
         metaChips.push(chip('msgs', null, meta.messages + ' ' + TEXT.messages, false, TEXT.messagesTitle));
+      if (typeof meta.historyEnd === 'number' && typeof meta.messages === 'number')
+        metaChips.push(
+          chip('current', TEXT.currentTurn, String(meta.messages - meta.historyEnd), true, TEXT.currentTitle),
+        );
       if (typeof meta.tools === 'number') metaChips.push(chip('tools', null, meta.tools + ' ' + TEXT.tools));
       if (meta.reason) metaChips.push(chip('reason', TEXT.reasonLabel, meta.reason));
       const bodyBytes = (() => {
@@ -1448,7 +1656,10 @@ window.__ModuleLoader__.load({
               h(
                 'span',
                 { key: 'sub', style: STYLE.stepSub },
-                'step ' + stepLabel + ' · ' + (itemMeta.messages || 0) + ' ' + TEXT.messages,
+                'step ' + stepLabel + ' · ' + (itemMeta.messages || 0) + ' ' + TEXT.messages +
+                  (typeof itemMeta.historyEnd === 'number'
+                    ? ' · ' + TEXT.currentTurn + ' ' + ((itemMeta.messages || 0) - itemMeta.historyEnd)
+                    : ''),
               ),
             );
           }),
@@ -1459,7 +1670,16 @@ window.__ModuleLoader__.load({
         'div',
         { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody },
         call
-          ? h(JsonNode, { key: mode + ':' + index, name: null, value: call.request, depth: 0, mode: mode, pal: pal })
+          ? h(JsonNode, {
+              key: mode + ':' + index,
+              name: null,
+              value: call.request,
+              depth: 0,
+              mode: mode,
+              pal: pal,
+              /* Where this Turn's own messages start inside request.messages. */
+              messagesHistoryEnd: meta.historyEnd,
+            })
           : h('div', { style: STYLE.note }, TEXT.empty),
       );
 

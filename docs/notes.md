@@ -76,4 +76,13 @@
 
 `client.js` 底部有一个 `globalThis.__DSH_PAYLOAD_TEST__` 开关，只在置位时把内部函数挂到 `globalThis.__DSH_PAYLOAD_INTERNALS__`（给 Node 里的验证脚本用），浏览器里永不触发。
 
-改完 `client.js` 后刷新 Web GUI 即可生效（profile 里是 `link:` 依赖，不需要重装）。
+改完 `client.js` 后刷新界面即可生效（profile 里是 `link:` 依赖，不需要重装；桌面端是 `Ctrl+R`，偶尔要退出重开）。
+
+## messages 里区分历史与本轮
+
+- 切分依据：这条回复所属 Turn 的 `turn/start.seq`。`buildMessages(events, cutSeq, turnStartSeq)` 折叠消息数组时，记下第一条 `seq >= turnStartSeq` 的消息下标作为 `historyEnd`，挂在 `call.meta.historyEnd` 上——**不写进 `request`**，payload 保持和实际发出的那份一致。
+- 渲染：`JsonNode` 收到 `messagesHistoryEnd`（只对 `messages` 数组生效，并向下透传一层）后，把前 `historyEnd` 条收进 `JsonHistoryGroup`（一行 `历史消息 (n)` + 「已折叠」提示），其后的消息用真实下标渲染并套上 `STYLE.jsonCurrent`：左边缘 2px 品牌色竖线 + 淡色底，颜色取自 `PALETTES[scheme].currentBorder/currentBg`。`marginLeft:-10px` 配 `paddingLeft:10px` 让竖线正好压在 `jsonGuide` 的引导线上，文字位置不变，连续几条本轮消息连成一条通栏竖线。
+- 折叠只是显示层：展开后下标仍是数组里的真实下标（用 `offset` 传给子节点），复制出来的 JSON 一字不差。
+- 「全部展开」会把历史组一起展开（`JsonHistoryGroup` 的初始态是 `mode === 'all'`）；`messages` 标题上另有 `本轮 n` / `历史 n` 两个计数，弹框 meta 行和 step 列表也带上本轮条数。
+- 数值验证：`verify-against-session.cjs` 断言 `historyEnd` 落在 `0..messages`、随 step 只增不减、且不小于上一轮最后一次调用已携带的消息数；当前真实会话 30 轮全部成立（如第 24 轮最后一次：1224 条消息里 1076 条历史、148 条本轮）。
+
