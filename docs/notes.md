@@ -104,3 +104,12 @@
 - 两个坑：**没有回复的步骤**在日志里只有 `assistant/attempt`，没有 `assistant/message`——这时不能伪造 body，要把失败尝试列出来；而一条 step 的最后一次尝试可能只是流断了（`stream` 里没有 finish 分块），所以结束原因要取**最后一条带 finish 的尝试**（`lastFinishOf`），否则真正的 502/AUTH 原因会被静默吞掉。
 - 响应体的 `tool_calls` 复用请求侧的工具卡片：`ResponsePanel` 把 `meta.toolDetailsByCallId` 继续传给 `JsonNode`，所以回复自己发起的调用能直接看到后来的成败与耗时。
 - 验证：`verify-against-session.cjs` 的 `responses` 段落逐调用对账结束原因、正文长度、`tool_calls` id 序列、usage 合计、重试次数，并断言回复自己的调用不能落到「未返回」。
+
+## 网络总览（第三屏）
+
+- 它是**纯视图**：不加字段、不重扫日志，只把另外两屏已经在内存里的 `meta`（`step` / `usage` / `response.finish` / `response.timing` / `response.attempts` / `request.messages.length`）横向排成一张表，所以首开耗时不变，也永远和请求/响应两屏一致。
+- 为什么值得单独一屏：请求侧回答「发了什么」，响应侧回答「回了什么」，但「这一轮到底几刀、哪一刀挂了、钱烧在哪一步」要在几十个标签页之间来回切才能拼出来——DevTools 的 Network 面板解决的正是这类问题。
+- 两个取舍：① 表格里**不印请求体字节**——那要 `JSON.stringify` 每一次调用的完整请求，一轮几十次调用会瞬间变成几百 MB 的字符串，行里改用「消息条数」当体积代理；② 网络视图里隐藏标签页/step 列表面板，因为表格自身就是选择器，再把选择器摞一遍只会挤掉表格宽度。
+- 状态圆点的颜色只表达结论（绿=正常结束、蓝=要求调用工具、红=失败、灰=没等到结果），具体原因挂在 `title` 上（失败时带 `code` / `status` / `message`）。
+- `复制表格` 导出 TSV 而不是 JSON：这张表的问题是「统计」，粘进表格软件立刻能排序、求和。
+- 验证：`render-smoke.cjs` 的 `o) network` 场景覆盖三行（正常 / 失败带重试 / 无回复）、合计行求和、`dsh-pl-netrow` 高亮唯一、以及行点击回调。

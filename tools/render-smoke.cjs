@@ -672,10 +672,10 @@ expect(
   'a missing response object did not say so',
 );
 
-/* The switch itself: two halves, exactly one active, reached from the dialog. */
+/* The switch itself: three halves, exactly one active, reached from the dialog. */
 const switchWalk = walk(DialogBody({ payload: payload([makeCall(1, 1, 3, 100)]) }));
 const segClasses = switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg'));
-expect(segClasses.length === 2, 'expected a two-way request/response switch, got ' + segClasses.length);
+expect(segClasses.length === 3, 'expected a request/response/network switch, got ' + segClasses.length);
 expect(
   switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg-on')).length === 1,
   'exactly one half of the switch should be active',
@@ -684,12 +684,87 @@ expect(
   /请求|Request/.test(switchWalk.text.join(' ')) && /响应|Response/.test(switchWalk.text.join(' ')),
   'switch halves are not labelled',
 );
+expect(/网络|Network/.test(switchWalk.text.join(' ')), 'the network half is not labelled');
+
+/* o) network view: one row per call, a totals row, a status per outcome, and a
+      click that selects that call. */
+const NetworkPanel = internals.networkPanel();
+expect(typeof NetworkPanel === 'function', 'NetworkPanel not exposed');
+
+const calledBack = [];
+const networkCalls = [makeCall(1, 1, 120, 14056), makeCall(2, 2, 121, 20100), makeCall(3, 3, 122, 3000)];
+networkCalls[0].meta.response = {
+  finish: { kind: 'tool-calls', failure: null },
+  attempts: [{ seq: 1, time: 0, finish: { kind: 'tool-calls', failure: null } }],
+  timing: { ttfbMs: 412, spanMs: 2600, records: 12 },
+  stats: { textChars: 10, reasoningChars: 0, toolCalls: 1, blocks: 2 },
+  body: { model: 'x', choices: [] },
+};
+/* The middle call failed twice (one retry): red status, retry counted, no body. */
+const failure = { code: 'SERVER', status: 502, message: 'upstream unavailable' };
+networkCalls[1].meta.response = {
+  finish: { kind: 'error', failure: failure },
+  attempts: [
+    { seq: 2, time: 0, finish: { kind: 'error', failure: failure } },
+    { seq: 3, time: 10, finish: { kind: 'error', failure: failure } },
+  ],
+  timing: { ttfbMs: null, spanMs: 900, records: 2 },
+  stats: null,
+  body: null,
+};
+/* The last call never answered: no finish, no usage, so its cells are dashes. */
+networkCalls[2].meta.response = { finish: null, attempts: [], timing: null, stats: null, body: null };
+networkCalls[2].meta.usage = null;
+
+const networkElement = NetworkPanel({
+  calls: networkCalls,
+  selected: 1,
+  onSelect: (position) => calledBack.push(position),
+});
+const networkWalk = walkAll(networkElement);
+const networkText = networkWalk.text.join(' ');
+
+expect(
+  networkWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-netrow')).length === 3,
+  'expected 3 network rows',
+);
+expect(
+  networkWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-netrow-on')).length === 1,
+  'exactly one network row should be marked active',
+);
+expect(/#1/.test(networkText) && /#2/.test(networkText) && /#3/.test(networkText), 'network rows lost their index');
+expect(/要求调用工具|tool calls/i.test(networkText), 'a tool-call finish is not shown as such');
+expect(/失败|failed/i.test(networkText), 'the failed call is not shown as failed');
+expect(/本轮合计|turn total/i.test(networkText), 'network table has no totals row');
+/* 14,056 + 20,100 tokens over the two metered calls. */
+expect(/34,156|34\.2k|34156/.test(networkText), 'totals row does not sum the metered calls: ' + networkText);
+expect(/—/.test(networkText), 'a call without usage/finish should render dashes');
+
+/* Rows answer the keyboard, not just the mouse. */
+const findRow = (node) => {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findRow(child);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node.type === 'tr' && node.props && node.props.tabIndex === 0) return node;
+  return findRow(node.props ? node.props.children : null);
+};
+const firstRow = findRow(networkElement);
+expect(!!firstRow, 'network rows are not focusable');
+if (firstRow) {
+  firstRow.props.onClick();
+  expect(calledBack.length === 1 && calledBack[0] === 0, 'clicking a row did not select it');
+}
 
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=network');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 14 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 15 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

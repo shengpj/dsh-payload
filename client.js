@@ -129,7 +129,7 @@ window.__ModuleLoader__.load({
           /* 响应侧：这一屏回答"模型回了什么"，与请求侧一一对应。 */
           viewRequest: '请求',
           viewResponse: '响应',
-          viewTitle: '切换查看这次调用发出去的请求体，或它收到的回复',
+          viewTitle: '切换查看这次调用发出去的请求体、它收到的回复，或这一轮所有调用的网络总览',
           responseNone: '日志里没有这次调用的回复记录（可能被中断或仍在流式返回）。',
           finishLabel: '结束原因',
           finishStop: '正常结束',
@@ -153,6 +153,26 @@ window.__ModuleLoader__.load({
           attemptsTitle: '同一步里失败的尝试；每一次都以一个 finish 分块结束，成功的那次不算在内。',
           attemptNo: '尝试 ',
           responseShapeTitle: '这一屏按 OpenAI chat-completion 的形态重建了响应，方便直接复制。',
+          /* 网络总览：一条调用一行，用来回答「这一轮花了多少、哪一步失败了」。 */
+          viewNetwork: '网络',
+          netCopy: '复制表格',
+          netEmpty: '这一轮没有记录到调用。',
+          netNoCol: '#',
+          netStepCol: 'step',
+          netStatusCol: '状态',
+          netMessagesCol: '消息',
+          netInputCol: '输入',
+          netCacheCol: '缓存',
+          netOutputCol: '输出',
+          netTotalCol: '合计',
+          netTtfbCol: '首字节',
+          netSpanCol: '总时长',
+          netRetriesCol: '重试',
+          netRowTitle: '看这次调用的回复',
+          netTotalRow: '本轮合计',
+          netErrors: '失败',
+          netSummaryTitle: '这一轮每一次调用的状态、耗时与 token；点任意一行看它的回复。',
+          netCopied: '已复制表格',
         }
       : {
           show: 'Request / response',
@@ -251,7 +271,7 @@ window.__ModuleLoader__.load({
           noUsage: 'no usage',
           viewRequest: 'Request',
           viewResponse: 'Response',
-          viewTitle: 'Switch between the request that was sent and the reply it received',
+          viewTitle: 'Switch between the request, the reply, and the whole call list of this turn',
           responseNone: 'No reply recorded for this call in the log (interrupted, or still streaming).',
           finishLabel: 'finish',
           finishStop: 'stopped',
@@ -276,6 +296,25 @@ window.__ModuleLoader__.load({
             'Failed attempts in this step; each ends with a finish chunk. The successful one is not counted.',
           attemptNo: 'attempt ',
           responseShapeTitle: 'This view rebuilds the reply in OpenAI chat-completion shape so it can be copied.',
+          viewNetwork: 'Network',
+          netCopy: 'Copy table',
+          netEmpty: 'No model call recorded for this turn.',
+          netNoCol: '#',
+          netStepCol: 'step',
+          netStatusCol: 'status',
+          netMessagesCol: 'msgs',
+          netInputCol: 'input',
+          netCacheCol: 'cache',
+          netOutputCol: 'output',
+          netTotalCol: 'total',
+          netTtfbCol: 'first byte',
+          netSpanCol: 'span',
+          netRetriesCol: 'retries',
+          netRowTitle: 'Open this call’s reply',
+          netTotalRow: 'turn total',
+          netErrors: 'failed',
+          netSummaryTitle: 'Every call in this turn: status, timing and tokens. Click a row to read its reply.',
+          netCopied: 'Table copied',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -448,6 +487,60 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-overlay, #ffffff)',
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
         boxShadow: 'inset 0 0 0 1px var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
+      },
+
+      /* ---- network view: one row per call, so a whole turn is scannable ---- */
+      netWrap: {
+        flex: '1 1 auto',
+        minHeight: 0,
+        overflow: 'auto',
+        padding: '0 14px 14px',
+      },
+      netTable: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        fontFamily: FONT_MONO,
+        fontSize: '12.5px',
+        lineHeight: '1.5',
+      },
+      netHeadCell: {
+        position: 'sticky',
+        top: 0,
+        zIndex: 1,
+        padding: '6px 8px',
+        textAlign: 'left',
+        fontWeight: '500',
+        whiteSpace: 'nowrap',
+        color: 'var(--dsw-alias-label-tertiary, #81858c)',
+        background: 'var(--dsw-alias-bg-base, #ffffff)',
+      },
+      netRow: {
+        cursor: 'pointer',
+        borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.16))',
+      },
+      netRowActive: {
+        background: 'var(--dsw-alias-interactive-bg-hover, #2631480f)',
+      },
+      netCell: {
+        padding: '6px 8px',
+        whiteSpace: 'nowrap',
+        fontVariantNumeric: 'tabular-nums',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      netFootCell: {
+        padding: '8px',
+        fontWeight: '600',
+        whiteSpace: 'nowrap',
+        borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.4))',
+        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+      },
+      netDot: {
+        display: 'inline-block',
+        width: '6px',
+        height: '6px',
+        marginRight: '5px',
+        borderRadius: '999px',
+        verticalAlign: 'middle',
       },
 
       /* ---- response side: the retry list sits above the rebuilt body ---- */
@@ -2453,6 +2546,11 @@ window.__ModuleLoader__.load({
         },
         Timeline: Timeline,
         ResponsePanel: ResponsePanel,
+        /* `NetworkPanel` is declared below this hook (it reuses `finishLabelOf`),
+           so the hook hands out a thunk for it, like `boundary` above. */
+        networkPanel: function networkPanel() {
+          return NetworkPanel;
+        },
         finishOfStream: finishOfStream,
         timingOfStream: timingOfStream,
         contentStatsOf: contentStatsOf,
@@ -2579,6 +2677,10 @@ window.__ModuleLoader__.load({
       '.dsh-pl-seg:not(.dsh-pl-seg-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
       'color:var(--dsw-alias-label-primary,#111827)}',
       '.dsh-pl-seg:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      /* Network rows are clickable list rows: hover on inactive rows, a visible
+         focus ring for the keyboard path, and no text cursor. */
+      '.dsh-pl-netrow:not(.dsh-pl-netrow-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
+      '.dsh-pl-netrow:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
       /* The source legend's family chips are navigation pills, not list rows:
          they borrow the hover rules but must not be counted as step-list rows. */
       '.dsh-pl-pill{border-radius:999px}',
@@ -3661,6 +3763,173 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * The network view: one row per model call in the Turn.
+     *
+     * This answers what the two JSON views cannot answer at a glance — how many
+     * calls the Turn made, which one failed, how long each took, and where the
+     * tokens went. Rows are built from the same `meta` objects the other views
+     * use, so this screen captures nothing extra; clicking a row selects that
+     * call and flips to its reply.
+     */
+    function NetworkPanel(props) {
+      const pal = props.pal || PALETTES.light;
+      const calls = Array.isArray(props.calls) ? props.calls : [];
+      const selected = typeof props.selected === 'number' ? props.selected : 0;
+      if (!calls.length) return h('div', { style: STYLE.note }, TEXT.netEmpty);
+
+      const num = { textAlign: 'right' };
+      const headRight = Object.assign({}, STYLE.netHeadCell, num);
+      const cellRight = Object.assign({}, STYLE.netCell, num);
+      const footRight = Object.assign({}, STYLE.netFootCell, num);
+      const columns = [
+        { key: 'no', label: TEXT.netNoCol },
+        { key: 'step', label: TEXT.netStepCol, right: true },
+        { key: 'status', label: TEXT.netStatusCol },
+        { key: 'messages', label: TEXT.netMessagesCol, right: true },
+        { key: 'input', label: TEXT.netInputCol, right: true },
+        { key: 'cache', label: TEXT.netCacheCol, right: true },
+        { key: 'output', label: TEXT.netOutputCol, right: true },
+        { key: 'total', label: TEXT.netTotalCol, right: true },
+        { key: 'ttfb', label: TEXT.netTtfbCol, right: true },
+        { key: 'span', label: TEXT.netSpanCol, right: true },
+        { key: 'retries', label: TEXT.netRetriesCol, right: true },
+      ];
+
+      const head = h(
+        'thead',
+        { key: 'head' },
+        h(
+          'tr',
+          { key: 'row' },
+          columns.map((column) =>
+            h(
+              'th',
+              { key: column.key, scope: 'col', style: column.right ? headRight : STYLE.netHeadCell },
+              column.label,
+            ),
+          ),
+        ),
+      );
+
+      const totals = { input: 0, cache: 0, output: 0, total: 0, errors: 0, retries: 0 };
+      const rows = [];
+      const dash = '—';
+
+      for (let index = 0; index < calls.length; index += 1) {
+        const call = calls[index] || {};
+        const meta = call.meta || {};
+        const response = meta.response || null;
+        const finish = response ? response.finish : null;
+        const kind = finish && finish.kind ? finish.kind : '';
+        const failure = finish && finish.failure ? finish.failure : null;
+        const usage = meta.usage || null;
+        const timing = response ? response.timing : null;
+        const attemptCount = response && Array.isArray(response.attempts) ? response.attempts.length : 0;
+        const retries = attemptCount > 1 ? attemptCount - 1 : 0;
+        const requestMessages = call.request && Array.isArray(call.request.messages) ? call.request.messages.length : 0;
+        const inputTokens = usage ? usage.input || 0 : 0;
+        const cacheTokens = usage ? usage.cache || 0 : 0;
+        const outputTokens = usage ? usage.output || 0 : 0;
+        const totalTokens = usage ? usage.total || 0 : 0;
+
+        totals.input += inputTokens;
+        totals.cache += cacheTokens;
+        totals.output += outputTokens;
+        totals.total += totalTokens;
+        totals.retries += retries;
+        if (kind === 'error') totals.errors += 1;
+
+        /* Colour says everything before a single word is read: red failed, green
+           finished cleanly, blue still wants tools, grey unknown/aborted. */
+        const dotColour =
+          kind === 'error'
+            ? pal.toolErr
+            : kind === 'stop'
+              ? pal.toolOk
+              : kind === 'tool-calls'
+                ? pal.currentBorder
+                : kind === 'aborted' || kind === 'interrupted'
+                  ? pal.number
+                  : pal.nil;
+        const statusTitle = failure
+          ? TEXT.finishTitle +
+            ' ' +
+            (failure.code || 'ERROR') +
+            (failure.status === null || failure.status === undefined ? '' : ' ' + failure.status) +
+            (failure.message ? ' · ' + failure.message : '')
+          : TEXT.finishTitle;
+        const active = index === selected;
+
+        rows.push(
+          h(
+            'tr',
+            {
+              key: 'row-' + index,
+              className: active ? 'dsh-pl-netrow dsh-pl-netrow-on' : 'dsh-pl-netrow',
+              style: active ? Object.assign({}, STYLE.netRow, STYLE.netRowActive) : STYLE.netRow,
+              tabIndex: 0,
+              title: TEXT.netRowTitle,
+              onClick: () => props.onSelect(index),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  props.onSelect(index);
+                }
+              },
+            },
+            h('td', { key: 'no', style: STYLE.netCell }, '#' + (typeof meta.index === 'number' ? meta.index : index + 1)),
+            h('td', { key: 'step', style: cellRight }, meta.step === undefined ? dash : String(meta.step)),
+            h(
+              'td',
+              { key: 'status', style: STYLE.netCell, title: statusTitle },
+              h('span', { key: 'dot', style: Object.assign({}, STYLE.netDot, { background: dotColour }) }),
+              finishLabelOf(kind),
+            ),
+            h('td', { key: 'messages', style: cellRight }, requestMessages ? formatExact(requestMessages) : dash),
+            h('td', { key: 'input', style: cellRight }, usage ? formatTokens(inputTokens) : dash),
+            h('td', { key: 'cache', style: cellRight }, usage ? formatTokens(cacheTokens) : dash),
+            h('td', { key: 'output', style: cellRight }, usage ? formatTokens(outputTokens) : dash),
+            h('td', { key: 'total', style: cellRight }, usage ? formatTokens(totalTokens) : dash),
+            h(
+              'td',
+              { key: 'ttfb', style: cellRight },
+              timing && timing.ttfbMs !== null && timing.ttfbMs !== undefined ? formatMs(timing.ttfbMs) : dash,
+            ),
+            h(
+              'td',
+              { key: 'span', style: cellRight },
+              timing && timing.spanMs !== null && timing.spanMs !== undefined ? formatMs(timing.spanMs) : dash,
+            ),
+            h('td', { key: 'retries', style: cellRight }, retries ? String(retries) : dash),
+          ),
+        );
+      }
+
+      const foot = h(
+        'tfoot',
+        { key: 'foot' },
+        h(
+          'tr',
+          { key: 'row' },
+          h('td', { key: 'label', style: STYLE.netFootCell, colSpan: 4 }, TEXT.netTotalRow),
+          h('td', { key: 'input', style: footRight }, formatTokens(totals.input)),
+          h('td', { key: 'cache', style: footRight }, formatTokens(totals.cache)),
+          h('td', { key: 'output', style: footRight }, formatTokens(totals.output)),
+          h('td', { key: 'total', style: footRight }, formatTokens(totals.total)),
+          h('td', { key: 'errors', style: footRight }, totals.errors ? totals.errors + ' ' + TEXT.netErrors : dash),
+          h('td', { key: 'blank', style: STYLE.netFootCell }, ''),
+          h('td', { key: 'retries', style: footRight }, totals.retries ? String(totals.retries) : dash),
+        ),
+      );
+
+      return h(
+        'div',
+        { style: STYLE.netWrap },
+        h('table', { key: 'table', style: STYLE.netTable }, head, h('tbody', { key: 'body' }, rows), foot),
+      );
+    }
+
     function DialogBody(props) {
       const payload = props.payload;
       const calls = payload.data && Array.isArray(payload.data.calls) ? payload.data.calls : [];
@@ -3763,6 +4032,54 @@ window.__ModuleLoader__.load({
           text = String(err);
         }
         copyText(text, flashDone('all'));
+      };
+
+      /* The network table as TSV: pastes straight into a spreadsheet, which is
+         what a "how expensive was this turn" question usually turns into. */
+      const copyTable = () => {
+        if (!callCount) return;
+        const header = [
+          TEXT.netNoCol,
+          TEXT.netStepCol,
+          TEXT.netStatusCol,
+          TEXT.netMessagesCol,
+          TEXT.netInputCol,
+          TEXT.netCacheCol,
+          TEXT.netOutputCol,
+          TEXT.netTotalCol,
+          TEXT.netTtfbCol,
+          TEXT.netSpanCol,
+          TEXT.netRetriesCol,
+        ];
+        const lines = [header.join('\t')];
+        for (let position = 0; position < callCount; position += 1) {
+          const item = calls[position] || {};
+          const itemMeta = item.meta || {};
+          const itemResponse = itemMeta.response || null;
+          const itemFinish = itemResponse ? itemResponse.finish : null;
+          const itemUsage = itemMeta.usage || null;
+          const itemTiming = itemResponse ? itemResponse.timing : null;
+          const itemAttempts =
+            itemResponse && Array.isArray(itemResponse.attempts) ? itemResponse.attempts.length : 0;
+          const itemMessages =
+            item.request && Array.isArray(item.request.messages) ? item.request.messages.length : 0;
+          lines.push(
+            [
+              '#' + (typeof itemMeta.index === 'number' ? itemMeta.index : position + 1),
+              itemMeta.step === undefined ? '' : String(itemMeta.step),
+              finishLabelOf(itemFinish && itemFinish.kind ? itemFinish.kind : ''),
+              String(itemMessages),
+              itemUsage ? String(itemUsage.input || 0) : '',
+              itemUsage ? String(itemUsage.cache || 0) : '',
+              itemUsage ? String(itemUsage.output || 0) : '',
+              itemUsage ? String(itemUsage.total || 0) : '',
+              itemTiming && typeof itemTiming.ttfbMs === 'number' ? String(itemTiming.ttfbMs) : '',
+              itemTiming && typeof itemTiming.spanMs === 'number' ? String(itemTiming.spanMs) : '',
+              itemAttempts > 1 ? String(itemAttempts - 1) : '0',
+            ].join('\t'),
+          );
+        }
+        copyText(lines.join('\n'), flashDone('table'));
       };
 
       const chip = (key, label, value, accent, title, variant) => {
@@ -3921,6 +4238,37 @@ window.__ModuleLoader__.load({
         respChips.push(chip('none', null, TEXT.responseNone));
       }
 
+      /* Network view: the table carries the detail, so the header summarises the
+         Turn instead of describing one call. */
+      const netView = view === 'network';
+      const netChips = [];
+      if (netView) {
+        let netTotal = 0;
+        let netErrors = 0;
+        let netRetries = 0;
+        for (let position = 0; position < callCount; position += 1) {
+          const itemMeta = (calls[position] || {}).meta || {};
+          const itemResponse = itemMeta.response || null;
+          if (itemMeta.usage) netTotal += itemMeta.usage.total || 0;
+          if (itemResponse && itemResponse.finish && itemResponse.finish.kind === 'error') netErrors += 1;
+          const itemAttempts =
+            itemResponse && Array.isArray(itemResponse.attempts) ? itemResponse.attempts.length : 0;
+          if (itemAttempts > 1) netRetries += itemAttempts - 1;
+        }
+        netChips.push(chip('calls', null, formatExact(callCount) + ' ' + TEXT.callsShort, false, TEXT.netSummaryTitle));
+        if (netErrors) {
+          netChips.push(
+            chip('errors', null, netErrors + ' ' + TEXT.netErrors, false, TEXT.netSummaryTitle, 'error'),
+          );
+        }
+        if (netRetries) {
+          netChips.push(
+            chip('retries', TEXT.netRetriesCol, String(netRetries), false, TEXT.netSummaryTitle, 'warn'),
+          );
+        }
+        netChips.push(chip('total', TEXT.netTotalCol, formatExact(netTotal), true, TEXT.netSummaryTitle));
+      }
+
       const header = h(
         'div',
         { key: 'header', style: STYLE.dialogHeader },
@@ -3957,71 +4305,101 @@ window.__ModuleLoader__.load({
               },
               TEXT.viewResponse,
             ),
+            h(
+              'button',
+              {
+                key: 'net',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': view === 'network' ? 'true' : 'false',
+                className: view === 'network' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
+                onClick: () => setView('network'),
+                style: Object.assign({}, STYLE.segBtn, view === 'network' ? STYLE.segBtnActive : null),
+              },
+              TEXT.viewNetwork,
+            ),
           ),
           h(
             'div',
             { key: 'actions', style: STYLE.headerActions },
-            h(
-              'button',
-              {
-                key: 'to-top',
-                type: 'button',
-                className: 'dsh-pl-btn',
-                onClick: jump('start'),
-                style: STYLE.smallButton,
-                title: TEXT.toTop,
-                'aria-label': TEXT.toTop,
-              },
-              '↑',
-            ),
-            h(
-              'button',
-              {
-                key: 'to-end',
-                type: 'button',
-                className: 'dsh-pl-btn',
-                onClick: jump('end'),
-                style: STYLE.smallButton,
-                title: TEXT.toEnd,
-                'aria-label': TEXT.toEnd,
-              },
-              '↓',
-            ),
-            h(
-              'button',
-              {
-                key: 'copy',
-                type: 'button',
-                className: 'dsh-pl-btn',
-                onClick: copyCurrent,
-                style: STYLE.smallButton,
-              },
-              flash === 'copy' ? TEXT.copied : TEXT.copy,
-            ),
-            callCount > 1
+            /* The ↑/↓ jump keys, per-call copy and the tree expansion only mean
+               something while a JSON tree is on screen; the network table swaps
+               them for a single "copy table". */
+            netView
               ? h(
                   'button',
                   {
-                    key: 'copy-all',
+                    key: 'copy-table',
                     type: 'button',
                     className: 'dsh-pl-btn',
-                    onClick: copyAll,
+                    onClick: copyTable,
                     style: STYLE.smallButton,
                   },
-                  flash === 'all' ? TEXT.copied : TEXT.copyAll,
+                  flash === 'table' ? TEXT.netCopied : TEXT.netCopy,
                 )
-              : null,
-            h(
-              'button',
-              {
-                key: 'expand',
-                type: 'button',
-                className: 'dsh-pl-btn',
-                onClick: () => setMode(mode === 'all' ? 'default' : 'all'),
-                style: STYLE.smallButton,
-              },
-              mode === 'all' ? TEXT.collapseAll : TEXT.expandAll,
-            ),
+              : [
+                  h(
+                    'button',
+                    {
+                      key: 'to-top',
+                      type: 'button',
+                      className: 'dsh-pl-btn',
+                      onClick: jump('start'),
+                      style: STYLE.smallButton,
+                      title: TEXT.toTop,
+                      'aria-label': TEXT.toTop,
+                    },
+                    '↑',
+                  ),
+                  h(
+                    'button',
+                    {
+                      key: 'to-end',
+                      type: 'button',
+                      className: 'dsh-pl-btn',
+                      onClick: jump('end'),
+                      style: STYLE.smallButton,
+                      title: TEXT.toEnd,
+                      'aria-label': TEXT.toEnd,
+                    },
+                    '↓',
+                  ),
+                  h(
+                    'button',
+                    {
+                      key: 'copy',
+                      type: 'button',
+                      className: 'dsh-pl-btn',
+                      onClick: copyCurrent,
+                      style: STYLE.smallButton,
+                    },
+                    flash === 'copy' ? TEXT.copied : TEXT.copy,
+                  ),
+                  callCount > 1
+                    ? h(
+                        'button',
+                        {
+                          key: 'copy-all',
+                          type: 'button',
+                          className: 'dsh-pl-btn',
+                          onClick: copyAll,
+                          style: STYLE.smallButton,
+                        },
+                        flash === 'all' ? TEXT.copied : TEXT.copyAll,
+                      )
+                    : null,
+                  h(
+                    'button',
+                    {
+                      key: 'expand',
+                      type: 'button',
+                      className: 'dsh-pl-btn',
+                      onClick: () => setMode(mode === 'all' ? 'default' : 'all'),
+                      style: STYLE.smallButton,
+                    },
+                    mode === 'all' ? TEXT.collapseAll : TEXT.expandAll,
+                  ),
+                ],
             h(
               'button',
               {
@@ -4037,12 +4415,12 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h('div', { key: 'row-meta', style: STYLE.chips }, view === 'response' ? respChips : metaChips),
-        h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
+        h('div', { key: 'row-meta', style: STYLE.chips }, netView ? netChips : view === 'response' ? respChips : metaChips),
+        netView ? null : h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
         /* Diff and source breakdown describe the REQUEST; the reply has no
            equivalent, so they fold away on the response tab instead of lying. */
         call && view === 'request' ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
-        callCount > 1
+        callCount > 1 && !netView
           ? h(Timeline, {
               key: 'row-timeline',
               calls: calls,
@@ -4064,7 +4442,7 @@ window.__ModuleLoader__.load({
 
       /* Tabs while they still fit; a step list beyond TAB_LIMIT. */
       let picker = null;
-      if (callCount > 1 && callCount <= TAB_LIMIT) {
+      if (!netView && callCount > 1 && callCount <= TAB_LIMIT) {
         picker = h(
           'div',
           { key: 'tabs', style: STYLE.tabs },
@@ -4142,7 +4520,7 @@ window.__ModuleLoader__.load({
       };
 
       let stepList = null;
-      if (callCount > TAB_LIMIT) {
+      if (!netView && callCount > TAB_LIMIT) {
         stepList = h(
           'div',
           {
@@ -4204,7 +4582,20 @@ window.__ModuleLoader__.load({
         );
       }
 
-      const body = h(
+      /* The network table IS the picker — every call is already a row — so the
+         tab strip and the step column step aside to give the table its width. */
+      const body = netView
+        ? h(NetworkPanel, {
+            key: 'net',
+            calls: calls,
+            selected: index,
+            pal: pal,
+            onSelect: (position) => {
+              setSelected(position);
+              setView('response');
+            },
+          })
+        : h(
         'div',
         { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody, title: TEXT.railTitle },
         call && view === 'response'

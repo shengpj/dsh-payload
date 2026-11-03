@@ -355,6 +355,10 @@ const replyKinds = new Map();
 let replyCalls = 0;
 let replyBytes = 0;
 let replyFailures = 0;
+/* The log is LIVE: this harness usually runs while a Turn is still streaming, so
+   the newest step can have a request but no reply yet. Those are counted, not
+   reported, because nothing is wrong with either side. */
+let replyPending = 0;
 const resultCallIds = new Set();
 for (const event of flat) {
   if (event.type !== 'tool/result') continue;
@@ -415,6 +419,15 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
     const want = expected.get(meta.step);
     replyCalls += 1;
     if (!want) {
+      /* No `assistant/message` and no `assistant/attempt` for this step yet: the
+         snapshot caught it mid-flight. Accept it only when the plugin agrees that
+         the reply is still absent. */
+      const pendingAttempts = response && Array.isArray(response.attempts) ? response.attempts.length : 0;
+      const pendingFinish = response && response.finish ? response.finish.kind : null;
+      if (!response || (pendingFinish === null && pendingAttempts === 0)) {
+        replyPending += 1;
+        continue;
+      }
       replyProblems.push('Turn ' + turn + ' #' + item.index + ': no reply record for step ' + meta.step);
       continue;
     }
@@ -498,7 +511,8 @@ for (const item of replyProblems.slice(0, 10)) console.log('  ' + item);
 if (!replyProblems.length) {
   console.log(
     '  finish reason, reply text, tool-call ids, usage and retry count all match the log; ' +
-      'rebuilt bodies total ' + replyBytes.toLocaleString('en-US') + ' bytes',
+      'rebuilt bodies total ' + replyBytes.toLocaleString('en-US') + ' bytes' +
+      (replyPending ? ' (' + replyPending + ' step(s) still streaming, not checked)' : ''),
   );
   console.log(
     '  finish reasons: ' +
