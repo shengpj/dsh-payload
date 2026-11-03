@@ -328,26 +328,34 @@ expect(typeof internals.DialogBody === 'function', 'DialogBody not exposed');
 const DialogBody = internals.DialogBody;
 const ResponsePanel = internals.ResponsePanel;
 
-/* a) single call: no tab strip, no step list, chips + JSON visible */
+/* a) single call: one row in the left column, the same shape as forty calls */
 const one = walk(DialogBody({ payload: payload([makeCall(1, 1, 7, 14056)]) }));
+/* One call, one row: the column never changes shape and never disappears. */
 expect(
-  one.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-tab')).length === 1,
-  'a single call should still show its one step card (that is where the side pair lives)',
+  one.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step')).length >= 1,
+  'a single call should still get a row in the left column',
 );
-expect(!one.classes.some((c) => c.includes('dsh-pl-step')), 'step list rendered for a single call');
+expect(
+  one.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step-on')).length === 1,
+  'the single call should be the active row',
+);
+expect(!one.classes.some((c) => c.includes('dsh-pl-tab')), 'the old tab strip is still rendered');
 expect(one.text.join(' ').includes('deepseek-v4.1-flash'), 'model chip missing');
 expect(one.text.join(' ').includes('messages'), 'JSON body not rendered');
 
-/* b) three calls: tabs, still no step list (the timeline's pills are dsh-pl-heavy) */
+/* b) three calls: three rows in the same column, nothing above the JSON pane */
 const three = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)]) }));
-const tabs = three.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-tab'));
-expect(tabs.length === 3, 'expected 3 tab buttons, got ' + tabs.length);
-expect(tabs.filter((c) => c.split(/\s+/).includes('dsh-pl-tab-on')).length === 1, 'exactly one tab should be active');
+const tabs = three.classes.filter((c) => c.includes('dsh-pl-tab'));
+expect(tabs.length === 0, 'expected no tab buttons, got ' + tabs.length);
 expect(
-  !three.classes.some((c) => c.split(/\s+/).includes('dsh-pl-step')),
-  'step list rendered for 3 calls',
+  three.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step')).length >= 3,
+  'expected three step rows',
 );
-expect(three.text.includes('#1') && three.text.includes('#3'), 'tab labels missing');
+expect(
+  three.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-step-on')).length === 1,
+  'exactly one step row should be active',
+);
+expect(three.text.includes('#1') && three.text.includes('#3'), 'step labels missing');
 
 /* c) 20 calls (this is what broke the old <select>): step list, no tabs */
 const many = walk(DialogBody({ payload: payload(Array.from({ length: 20 }, (_, i) => makeCall(i + 1, 40 + i, 10 + i, 1000 * (i + 1)))) }));
@@ -417,7 +425,7 @@ internals.publishDialog({
 const open = walk(overlay({}));
 const openText = open.text.join(' ');
 expect(openText.includes('Turn 24'), 'overlay did not render the published title');
-expect(open.classes.some((c) => c.includes('dsh-pl-tab')), 'overlay did not render the tab strip');
+expect(open.classes.some((c) => c.split(/\s+/).includes('dsh-pl-step')), 'overlay did not render the step column');
 expect(openText.includes('#1 / 2'), 'overlay dialog lost the call chip');
 
 internals.publishDialog({ status: 'error', title: '本轮发送给模型的完整请求', message: 'sessions service unavailable' });
@@ -793,7 +801,7 @@ expect(
       holds the steps only. One pair for the whole dialog, bound to the selected
       step: flip the side and the pane swaps, the step selection stays. */
 
-const sideCalls = [makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)];
+const sideCalls = [makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200, withSources.meta.sources), makeCall(3, 7, 11, 300)];
 const giveReply = (target, id) => {
   target.meta.response = {
     finish: { kind: 'tool-calls', failure: null },
@@ -829,6 +837,39 @@ giveReply(sideCalls[0], 'chatcmpl-smoke-1');
 giveReply(sideCalls[1], 'chatcmpl-smoke-2');
 
 const gestureRoot = () => DialogBody({ payload: payload(sideCalls) });
+const findKey = (node, key) => {
+  if (!node || typeof node !== 'object') return null;
+  if (node.key === key) return node;
+  for (const child of (node.props && node.props.children) || []) {
+    const found = findKey(child, key);
+    if (found) return found;
+  }
+  return null;
+};
+const layoutTree = gestureRoot();
+const paneLayout = findKey(layoutTree, 'pane');
+expect(Boolean(paneLayout), 'JSON pane missing');
+expect(
+  paneLayout && paneLayout.props.children.map((child) => child.key).join(',') === 'pane-bar,row-meta,body',
+  'summary must be inside the pane between the side selector and JSON body',
+);
+expect(!findKey(findKey(layoutTree, 'header'), 'row-meta'), 'summary is still in the dialog header');
+
+/* The dialog is a fixed-height column: the header and the foot note may grow or
+   shrink between 请求 and 响应, but the frame around them must not. Without that,
+   the short reply and the long request make the modal jump on every switch. */
+const frameHeight = layoutTree.props.style.height;
+expect(frameHeight === '88vh', 'dialog height must be fixed, got ' + String(frameHeight));
+const splitLayout = findKey(layoutTree, 'split');
+expect(Boolean(splitLayout), 'the step column is not rendered as a sibling of the pane');
+expect(
+  splitLayout && splitLayout.props.children[0] && splitLayout.props.children[0].key === 'steps',
+  'the left column is missing from the split',
+);
+expect(
+  !findKey(layoutTree, 'tabs'),
+  'the tab strip is still rendered above the split',
+);
 const beforeSink = mountWalk(gestureRoot);
 
 const pairCount = beforeSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side')).length;
@@ -848,7 +889,7 @@ expect(
 
 const cardsOf = (sink) =>
   sink.buttons.filter((node) =>
-    String((node.props || {}).className || '').split(/\s+/).includes('dsh-pl-tabhit'),
+    String((node.props || {}).className || '').split(/\s+/).includes('dsh-pl-stephit'),
   );
 const cardCount = cardsOf(beforeSink).length;
 expect(cardCount === 3, 'expected three step cards, got ' + cardCount);
@@ -883,6 +924,8 @@ expect(
    marker for "which side is up" — the request half never carries it. */
 const replyOpen = (sink) => /首字节|first byte/.test(sink.text.join(' '));
 expect(!replyOpen(secondSink), 'the dialog did not open on the request side');
+const sourcePanelVisible = (sink) => sink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-sources'));
+expect(sourcePanelVisible(secondSink), 'request source panel missing before switching');
 
 const sideButton = (sink, pattern) =>
   sink.buttons.filter((node) => pattern.test(labelOf(node, 0).trim()))[0];
@@ -892,6 +935,8 @@ expect(Boolean(responseButton), 'the pane has no 响应 button');
 responseButton.props.onClick();
 const afterSink = rerender(gestureRoot);
 expect(replyOpen(afterSink), 'the request side is still on screen after clicking 响应');
+expect(sourcePanelVisible(afterSink), 'request source panel disappeared on response');
+expect(afterSink.barSegs === secondSink.barSegs, 'request source breakdown changed on response');
 expect(
   /chatcmpl-smoke-2/.test(afterSink.text.join(' ')),
   'the reply of the selected step did not replace the request body',
@@ -902,7 +947,7 @@ expect(
 );
 expect(
   Boolean(pickStep(afterSink, '#2')) &&
-    String(pickStep(afterSink, '#2').props.className || '').split(/\s+/).includes('dsh-pl-tabhit'),
+    String(pickStep(afterSink, '#2').props.className || '').split(/\s+/).includes('dsh-pl-stephit'),
   'the step selection was lost when the side changed',
 );
 
@@ -912,6 +957,7 @@ expect(Boolean(requestButton), 'the pane has no 请求 button');
 requestButton.props.onClick();
 const backSink = rerender(gestureRoot);
 expect(!replyOpen(backSink), 'switching back to 请求 did not restore the request body');
+expect(sourcePanelVisible(backSink), 'request source panel missing after switching back');
 expect(/messages/.test(backSink.text.join(' ')), 'the JSON tree is gone after switching back');
 
 /* ---------------------------------------------------------------- reporting */

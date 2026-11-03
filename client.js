@@ -127,7 +127,6 @@ window.__ModuleLoader__.load({
           /* 响应侧：这一屏回答"模型回了什么"，与请求侧一一对应。 */
           viewRequest: '请求',
           viewResponse: '响应',
-          viewTitle: 'JSON 右上角切换：看这一步发出去的请求体，或它收到的回复',
           responseNone: '日志里没有这次调用的回复记录（可能被中断或仍在流式返回）。',
           finishLabel: '结束原因',
           finishStop: '正常结束',
@@ -247,7 +246,6 @@ window.__ModuleLoader__.load({
           noUsage: 'no usage',
           viewRequest: 'Request',
           viewResponse: 'Response',
-          viewTitle: "Switch at the JSON pane's top-right: the request this step sent, or the reply it got",
           responseNone: 'No reply recorded for this call in the log (interrupted, or still streaming).',
           finishLabel: 'finish',
           finishStop: 'stopped',
@@ -326,6 +324,7 @@ window.__ModuleLoader__.load({
         display: 'flex',
         flexDirection: 'column',
         width: 'min(1040px, 96vw)',
+        height: '88vh',
         maxHeight: '88vh',
         boxSizing: 'border-box',
         borderRadius: '12px',
@@ -458,22 +457,6 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-brand-primary, #2f6fed)',
       },
 
-      /* The card body is a button so a card is one tab stop, not three. */
-      tabHit: {
-        font: 'inherit',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        gap: '2px',
-        flex: '1 1 auto',
-        minWidth: 0,
-        padding: 0,
-        border: 'none',
-        background: 'transparent',
-        color: 'inherit',
-        textAlign: 'left',
-        cursor: 'pointer',
-      },
       stepHit: {
         font: 'inherit',
         display: 'flex',
@@ -725,57 +708,9 @@ window.__ModuleLoader__.load({
         letterSpacing: '0.04em',
       },
 
-      tabs: {
-        flex: '0 0 auto',
-        minHeight: '52px',
-        display: 'flex',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '8px',
-        padding: '10px 16px',
-        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.2))',
-        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
-      },
-      tab: {
-        font: 'inherit',
-        flex: '0 0 auto',
-        display: 'inline-flex',
-        alignItems: 'baseline',
-        gap: '7px',
-        fontSize: '13px',
-        lineHeight: '20px',
-        padding: '5px 11px',
-        borderRadius: '8px',
-        cursor: 'pointer',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
-        background: 'transparent',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-        fontWeight: 500,
-        whiteSpace: 'nowrap',
-        transition: 'background-color .12s ease, border-color .12s ease, color .12s ease',
-      },
-      tabActive: {
-        border: '1px solid var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
-        background: 'var(--dsw-alias-bg-overlay, #ffffff)',
-        color: 'var(--dsw-alias-brand-primary, #2f6feb)',
-        fontWeight: 600,
-        boxShadow: 'inset 0 0 0 1px var(--dsw-alias-brand-primary, rgba(90,140,255,0.5))',
-      },
-      tabIndex: {
-        fontSize: '13px',
-        fontWeight: 600,
-        fontVariantNumeric: 'tabular-nums',
-      },
-      tabMeta: {
-        fontSize: '11.5px',
-        lineHeight: '16px',
-        fontWeight: 400,
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-        opacity: 0.9,
-        fontVariantNumeric: 'tabular-nums',
-      },
-      /* A Turn can run dozens of calls: past a dozen, tabs are replaced by a step
-         list — one row per call, scannable in a column instead of a strip. */
+      /* Every call of a Turn gets a row in the left column, however few there are:
+         one shape for one call and for forty. The column scrolls on its own, the
+         JSON pane keeps the rest of the width. */
       split: {
         flex: '1 1 auto',
         minHeight: 0,
@@ -2544,10 +2479,6 @@ window.__ModuleLoader__.load({
       'border-color:var(--dsw-alias-border-l2,rgba(127,127,127,.5))}',
       '.dsh-pl-btn:active{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
-      '.dsh-pl-tab:not(.dsh-pl-tab-on):hover{color:var(--dsw-alias-label-primary,#111827);',
-      'border-color:var(--dsw-alias-border-l2,rgba(127,127,127,.5));',
-      'background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.6))}',
-      '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
       /* The 请求 / 响应 pair inside a step row: only the half that is not already
@@ -2558,7 +2489,7 @@ window.__ModuleLoader__.load({
       /* A side with nothing behind it (the call never got a reply) reads as muted. */
       '.dsh-pl-side-off{opacity:.55}',
       /* The card/row body is itself a button; it must not paint its own frame. */
-      '.dsh-pl-tabhit:focus-visible,.dsh-pl-stephit:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:2px;border-radius:6px}',
+      '.dsh-pl-stephit:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:2px;border-radius:6px}',
       /* The source legend's family chips are navigation pills, not list rows:
          they borrow the hover rules but must not be counted as step-list rows. */
       '.dsh-pl-pill{border-radius:999px}',
@@ -2611,8 +2542,7 @@ window.__ModuleLoader__.load({
 
     const MAX_STRING_CHARS = 320;
     const EXPAND_ALL_DEPTH = 6;
-    /* Tabs read best for a handful of calls; beyond this they become a step list. */
-    const TAB_LIMIT = 12;
+
     /* How much of a tool result to show inline before truncating with a byte note.
        The full text stays in the copied JSON, so this only bounds one screen. */
     const TOOL_RESULT_PREVIEW = 2000;
@@ -3949,12 +3879,9 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h('div', { key: 'row-meta', style: STYLE.chips }, side === 'response' ? respChips : metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
-        /* The source breakdown describes the REQUEST; the reply has no
-           equivalent, so it folds away on the response tab instead of lying.
-           The "what changed since the previous call" marks live inside the
-           `messages` array itself, so there is no third row here any more. */
+        /* The source breakdown always describes the selected step's request,
+           including while its response is shown. Keep it mounted across switches. */
         callCount > 1
           ? h(Timeline, {
               key: 'row-timeline',
@@ -3964,7 +3891,7 @@ window.__ModuleLoader__.load({
               pal: pal,
             })
           : null,
-        call && side === 'request'
+        call
           ? h(SourcePanel, {
               key: 'row-sources',
               sources: meta.sources,
@@ -3976,7 +3903,7 @@ window.__ModuleLoader__.load({
       );
 
       /* The 请求 / 响应 pair sits in the JSON pane's own top-right corner: the step
-         is chosen in the picker (cards, or the left column past TAB_LIMIT), the side
+         is chosen in the left column, the side
          is chosen where the content appears, so neither control has to be repeated
          per row and no row has to be scanned twice. */
       const renderPaneSides = () => {
@@ -4036,55 +3963,6 @@ window.__ModuleLoader__.load({
         (typeof itemMeta.messages === 'number' ? ' · ' + itemMeta.messages + ' ' + TEXT.messages : '') +
         (typeof itemMeta.tools === 'number' ? ' · ' + itemMeta.tools + ' ' + TEXT.tools : '');
 
-      let picker = null;
-      if (callCount <= TAB_LIMIT) {
-        picker = h(
-          'div',
-          { key: 'tabs', style: STYLE.tabs, title: TEXT.viewTitle },
-          calls.map((item, position) => {
-            const itemMeta = item.meta || {};
-            const stepLabel = itemMeta.step !== undefined ? itemMeta.step : position + 1;
-            const active = position === index;
-            return h(
-              'div',
-              {
-                key: 'call-' + (item.index || position + 1),
-                className: active ? 'dsh-pl-tab dsh-pl-tab-on' : 'dsh-pl-tab',
-                style: Object.assign({}, STYLE.tab, active ? STYLE.tabActive : null),
-              },
-              h(
-                'button',
-                {
-                  key: 'hit',
-                  type: 'button',
-                  className: 'dsh-pl-tabhit',
-                  onClick: () => setSelected(position),
-                  style: STYLE.tabHit,
-                  title: stepTitle(position, itemMeta),
-                },
-                h('span', { key: 'i', style: STYLE.tabIndex }, '#' + (item.index || position + 1)),
-                h(
-                  'span',
-                  { key: 'm', style: STYLE.tabMeta },
-                  'step ' +
-                    stepLabel +
-                    ' · ' +
-                    (itemMeta.messages || 0) +
-                    ' ' +
-                    TEXT.messages +
-                    (itemMeta.usage && typeof itemMeta.usage.total === 'number'
-                      ? ' · ' + formatTokens(itemMeta.usage.total)
-                      : ''),
-                ),
-              ),
-            );
-          }),
-        );
-      }
-
-      /* Past TAB_LIMIT the calls move into a column: every row keeps its number, step,
-         message count and tokens, and the JSON pane gets the rest of the width — far
-         easier to scan than a dropdown of dozens of one-line options. */
       const stepRefs = React.useRef([]);
 
       React.useEffect(
@@ -4114,7 +3992,7 @@ window.__ModuleLoader__.load({
       };
 
       let stepList = null;
-      if (callCount > TAB_LIMIT) {
+      if (callCount > 0) {
         stepList = h(
           'div',
           {
@@ -4215,7 +4093,9 @@ window.__ModuleLoader__.load({
         'div',
         { key: 'pane-bar', style: STYLE.paneBar },
         call ? renderPaneSides() : null,
-      ), body);
+      ), call ? h('div', { key: 'row-meta', className: 'dsh-pl-pane-meta', style: STYLE.chips },
+        side === 'response' ? respChips : metaChips,
+      ) : null, body);
 
       /* Only worth saying when the log carries far more than the model reads — and
          only on the request tab, which is what the note is about. */
@@ -4237,7 +4117,6 @@ window.__ModuleLoader__.load({
         'div',
         { style: dialogStyle, onClick: (event) => event.stopPropagation() },
         header,
-        picker,
         stepList ? h('div', { key: 'split', style: STYLE.split }, stepList, pane) : pane,
         foot,
       );
@@ -4273,7 +4152,7 @@ window.__ModuleLoader__.load({
           payload.status === 'error' ? TEXT.error + payload.message : payload.status === 'empty' ? TEXT.empty : TEXT.loading;
         inner = h(
           'div',
-          { style: Object.assign({}, STYLE.dialog, { maxHeight: '40vh' }), onClick: (event) => event.stopPropagation() },
+          { style: Object.assign({}, STYLE.dialog, { height: 'auto', maxHeight: '40vh' }), onClick: (event) => event.stopPropagation() },
           h(
             'div',
             { style: STYLE.dialogHeader },
@@ -4333,7 +4212,7 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           {
-            style: Object.assign({}, STYLE.dialog, { maxHeight: '40vh' }),
+            style: Object.assign({}, STYLE.dialog, { height: 'auto', maxHeight: '40vh' }),
             onClick: (event) => event.stopPropagation(),
           },
           h(
