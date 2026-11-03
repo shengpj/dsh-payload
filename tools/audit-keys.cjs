@@ -73,6 +73,6 @@ const declared = new Set([...src.matchAll(/className: '([^']+)'/g)].flatMap((m) 
 const cssClasses = new Set(
   [...src.matchAll(/\.dsh-pl-[a-z-]+/g)].map((m) => m[0].slice(1)),
 );
-for (const cls of ['dsh-pl-action', 'dsh-pl-icon', 'dsh-pl-tip', 'dsh-pl-btn', 'dsh-pl-tab', 'dsh-pl-tab-on', 'dsh-pl-step', 'dsh-pl-step-on', 'dsh-pl-seg', 'dsh-pl-seg-on', 'dsh-pl-netrow', 'dsh-pl-netrow-on']) {
+for (const cls of ['dsh-pl-action', 'dsh-pl-icon', 'dsh-pl-tip', 'dsh-pl-btn', 'dsh-pl-tab', 'dsh-pl-tab-on', 'dsh-pl-tabhit', 'dsh-pl-step', 'dsh-pl-step-on', 'dsh-pl-stephit', 'dsh-pl-side', 'dsh-pl-side-on', 'dsh-pl-side-off']) {
   console.log(cls + ' used=' + src.split(cls).length + ' css=' + cssClasses.has(cls));
 }

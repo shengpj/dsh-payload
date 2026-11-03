@@ -44,14 +44,14 @@
 - 切点是该 step 的**首个响应事件**，不是 `step/start`：本轮的运行时上下文注入（`Time sampled while preparing turn N, step M…` 这类 `user/message`）是在 `step/start` **之后**才写进日志的，用 `step/start` 当切点会把它们漏掉，`messages` 甚至可能为空。
 - 因为切点是逐次推进的，第 2 次调用天然包含第 1 次的 assistant 消息和 `tool/result`——**逐次累积**，与真实请求一致。
 - 标签页的 `title` 与面板摘要都带 `messages` 条数、`tools` 个数和 `reason`；`reason` 来自继承到的 header，只说明这份配置是何时写的，不代表本次调用的类型（`initial` / `change` / `resume` / `series`）。
-- 只有 1 次调用时不显示标签页，退化成单个浏览视图；超过 12 次换成左侧 step 列表（一个 Turn 可能有几十次调用）——下拉框只能塞下一行 `#k`，看不到 step 号、消息条数和 token，列表都能看到，且右侧 JSON 仍占满剩余宽度。
+- 只有 1 次调用时不显示卡片，退化成单个浏览视图（`请求` / `响应` 这一对仍保留）；超过 12 次换成左侧 step 列表（一个 Turn 可能有几十次调用）——下拉框只能塞下一行 `#k`，看不到 step 号、消息条数和 token，列表都能看到，且右侧 JSON 仍占满剩余宽度。
 - 上界不依赖插槽的 `seq`（那只是兜底），避免 `seq` 恰好落在某个中间事件时把后面的调用截掉。
 
 ## 踩过的坑
 
 **不要在 Slot 组件里调用 `props.useSessions()` 之类的“看起来像 hook”的注入属性。** 首次实现时在组件顶层调用了它，渲染期抛错后框架会**剥夺（abdicate）**该条目：按钮完全不渲染，而 `Slots` inspect 里该条目的 `active` 变成 `false`。诊断顺序是：先挂两个零依赖的静态探针（`conversation.composer.dock` / `turnTail`）二分定位——两个探针都出现即说明插件加载正常，问题在组件自身；然后把服务获取改成**点击时**再 `ctx.get('sessions')`，渲染期不依赖任何注入服务。
 
-**不要用 `request/header` 当作调用边界。** 第一版就是这么写的，结果一次调用都分不出来（标签页永远不出现）。`request/header` 只在调用配置变化时写一条，密集工具调用的 Turn 里可能一次都没有（实测一个 1148 条记录的会话里只有 5 条，而 `step/start` 有 186 条）。分组锚点必须是 `step/start`，配置则从不超过该 step 的最近一条 header 继承。
+**不要用 `request/header` 当作调用边界。** 第一版就是这么写的，结果一次调用都分不出来（卡片永远不出现）。`request/header` 只在调用配置变化时写一条，密集工具调用的 Turn 里可能一次都没有（实测一个 1148 条记录的会话里只有 5 条，而 `step/start` 有 186 条）。分组锚点必须是 `step/start`，配置则从不超过该 step 的最近一条 header 继承。
 
 **`system/message` / `user/message` 是增量记录。** 空的 `content: []` 表示“这一轮没有新增”，不是“发送一条空消息”，重建时必须跳过，否则会把模型根本没收到过的空 system 塞进 payload。
 
@@ -72,7 +72,7 @@
 `Theme.listTokens` 只有颜色 token，没有任何字体/行高 token，所以排版不引用变量，靠几条纪律和 GUI 对齐：
 
 - **字体继承 `inherit`**：只有 payload 正文换成等宽栈（`ui-monospace, SFMono-Regular, …`），标题、chips、按钮全部跟随应用字体——自带一套字体栈就会立刻显得“不是同一个软件”。
-- **四级字号 + 统一 20px 行高**：14 标题 / 13 控件（标签页、step 列表）/ 12 正文（chips、按钮、等宽 payload）/ 11.5 微标签（`step 3 · 12 条消息`）。控件高度 28–30px、圆角 8px（弹框 12px），和官方按钮、气泡的尺度一致。
+- **四级字号 + 统一 20px 行高**：14 标题 / 13 控件（卡片、step 列表）/ 12 正文（chips、按钮、等宽 payload）/ 11.5 微标签（`step 3 · 12 条消息`）。控件高度 28–30px、圆角 8px（弹框 12px），和官方按钮、气泡的尺度一致。
 - **数字用 `tabular-nums`**：token 数、消息条数、`#k / N` 在切换时不会跳动。
 - **悬停/焦点靠注入的 CSS**：`.dsh-pl-btn` / `.dsh-pl-tab` / `.dsh-pl-step` 三个类补上 `:hover`、`:focus-visible` 和应用的 150ms 过渡。
 - **触发器照抄官方动作按钮**：`28×28`、`radius-sm`、`padding 6px`、`svg 15×15`、静止 `label-tertiary`、hover `interactive-bg-hover`；气泡用 `alias-tooltip-bg` + `static-neutral-bluish-00`（黑底白字）、`13px/20px`、`3px 7px`、`radius-sm`，在**下方**弹出（和同一排的“复制 / 好的回答”一致），空间不足时才翻到上方。
@@ -97,7 +97,7 @@
 - 数值验证：`verify-against-session.cjs` 断言 `historyEnd` 落在 `0..messages`、随 step 只增不减、且不小于上一轮最后一次调用已携带的消息数；当前真实会话 30 轮全部成立（如第 24 轮最后一次：1224 条消息里 1076 条历史、148 条本轮）。
 
 
-## 响应侧（请求 / 响应两屏）
+## 响应侧（重建的 chat-completion 响应）
 
 - 数据来源全部是这一步自己的记录：`assistant/message` 给正文（`content` 分块：`text` / `reasoning` / `tool-call`）、`usage` 和 `source`（真实 model/provider）；它 `.data.stream` 末尾的 `finish` 分块给出结束原因（`kind` + `failure{message, code, status}`）；`assistant/attempt` 是这一步失败过的每一次尝试，各自也带一份 `stream`/`finish`；时间从分块的 `time`（或 `time0 + dt[]`）里还原，`step/start.time` 到第一个分块是「首字节」，首尾之差是「总时长」。
 - 重建的响应体用 OpenAI chat-completion 形态（`choices[0].message` + `finish_reason` + `usage`），因为它才是「复制出去就能直接喂给别的工具」的形状；`finish_reason` 由 finish kind 映射（`tool-calls` → `tool_calls`、`max-tokens` → `length`、`aborted` → `aborted`）。
@@ -105,11 +105,10 @@
 - 响应体的 `tool_calls` 复用请求侧的工具卡片：`ResponsePanel` 把 `meta.toolDetailsByCallId` 继续传给 `JsonNode`，所以回复自己发起的调用能直接看到后来的成败与耗时。
 - 验证：`verify-against-session.cjs` 的 `responses` 段落逐调用对账结束原因、正文长度、`tool_calls` id 序列、usage 合计、重试次数，并断言回复自己的调用不能落到「未返回」。
 
-## 网络总览（第三屏）
+## 请求 / 响应为什么长在每个 step 上
 
-- 它是**纯视图**：不加字段、不重扫日志，只把另外两屏已经在内存里的 `meta`（`step` / `usage` / `response.finish` / `response.timing` / `response.attempts` / `request.messages.length`）横向排成一张表，所以首开耗时不变，也永远和请求/响应两屏一致。
-- 为什么值得单独一屏：请求侧回答「发了什么」，响应侧回答「回了什么」，但「这一轮到底几刀、哪一刀挂了、钱烧在哪一步」要在几十个标签页之间来回切才能拼出来——DevTools 的 Network 面板解决的正是这类问题。
-- 两个取舍：① 表格里**不印请求体字节**——那要 `JSON.stringify` 每一次调用的完整请求，一轮几十次调用会瞬间变成几百 MB 的字符串，行里改用「消息条数」当体积代理；② 网络视图里隐藏标签页/step 列表面板，因为表格自身就是选择器，再把选择器摞一遍只会挤掉表格宽度。
-- 状态圆点的颜色只表达结论（绿=正常结束、蓝=要求调用工具、红=失败、灰=没等到结果），具体原因挂在 `title` 上（失败时带 `code` / `status` / `message`）。
-- `复制表格` 导出 TSV 而不是 JSON：这张表的问题是「统计」，粘进表格软件立刻能排序、求和。
-- 验证：`render-smoke.cjs` 的 `o) network` 场景覆盖三行（正常 / 失败带重试 / 无回复）、合计行求和、`dsh-pl-netrow` 高亮唯一、以及行点击回调。
+第一版把「请求 / 响应」做成弹框顶部的开关，层级于是变成「先选一半，再选第几步」：同一个 step 在请求侧的列表里出现一次、在响应侧的列表里又出现一次，每次切换都要跨两个控件。第二版把这个选择下放到 step 行——**行的右边就是那一步的 `请求 | 响应`**，一次点击同时给出「哪一步」和「哪一半」，顶部不再有开关，同一个 step 也不再重复出现。
+
+- 只有一个 step 时也显示这一对按钮：它们不是「视图切换」而是「这一行的两个面」，藏起来就没有入口。
+- 没有回复的 step，`响应` 按钮灰显（`dsh-pl-side-off`），点进去仍走响应侧的空态文案，不伪造空回复。
+- 曾经还有第三屏「网络」，把一轮每次调用排成一行表格。它被删掉了：状态、耗时、token 在 step 行和响应侧 chip 里已经都有，多一屏只是多一次选择，还要为它让出卡片/列表的宽度。

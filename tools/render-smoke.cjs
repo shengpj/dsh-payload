@@ -16,6 +16,32 @@ const path = require('path');
 
 const hookState = { calls: [], keyed: [] };
 
+/* ------------------------------------------------------- stateful mounting */
+/* `walk()` renders with inert hooks, which is all the static scenarios need.
+   The step/side gesture IS state (one selected step, one selected side), so
+   `mountWalk()` renders the same tree with a per-component hook store and keeps
+   re-rendering while anything is dirty. */
+const hookStores = new Map();
+let mounting = false;
+let activeStore = null;
+
+function runComponent(fn, props) {
+  if (!mounting) return fn(props);
+  let store = hookStores.get(fn);
+  if (!store) {
+    store = { cells: [], index: 0, dirty: false };
+    hookStores.set(fn, store);
+  }
+  const previous = activeStore;
+  activeStore = store;
+  store.index = 0;
+  try {
+    return fn(props);
+  } finally {
+    activeStore = previous;
+  }
+}
+
 const ReactStub = {
   createElement(type, props, ...children) {
     const flat = [];
@@ -28,10 +54,24 @@ const ReactStub = {
     return { type, props: Object.assign({}, props, { children: flat }), key };
   },
   useState(initial) {
-    return [typeof initial === 'function' ? initial() : initial, () => {}];
+    if (!activeStore) return [typeof initial === 'function' ? initial() : initial, () => {}];
+    const store = activeStore;
+    const slot = store.index;
+    store.index += 1;
+    if (!(slot in store.cells)) {
+      store.cells[slot] = typeof initial === 'function' ? initial() : initial;
+    }
+    const set = (next) => {
+      const value = typeof next === 'function' ? next(store.cells[slot]) : next;
+      if (value === store.cells[slot]) return;
+      store.cells[slot] = value;
+      store.dirty = true;
+    };
+    return [store.cells[slot], set];
   },
   useReducer(reducer, initial) {
-    return [initial, () => {}];
+    const cell = ReactStub.useState(initial);
+    return [cell[0], (action) => cell[1]((value) => reducer(value, action))];
   },
   useRef(value) {
     return { current: value };
@@ -97,7 +137,7 @@ function render(node, sink) {
       render(instance.render(), sink);
       return;
     }
-    render(node.type(node.props), sink);
+    render(runComponent(node.type, node.props), sink);
     return;
   }
   /* The source bar's segments carry no class of their own; count its children. */
@@ -107,6 +147,7 @@ function render(node, sink) {
         && /·\s*\d+$/.test(c.props.title))) {
     sink.barSegs = node.props.children.length;
   }
+  if (node.type === 'button') sink.buttons.push(node);
   const className = node.props && node.props.className;
   if (typeof className === 'string') {
     sink.classes.push(className);
@@ -132,9 +173,49 @@ function render(node, sink) {
 }
 
 function walk(element) {
-  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [] };
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [], buttons: [] };
   render(element, sink);
   return sink;
+}
+
+/* The label a button renders: its children are already plain elements by the time
+   it is collected, so this never re-runs a component. */
+function labelOf(node, depth) {
+  if (depth > 8) return '';
+  if (node === null || node === undefined || node === false) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map((child) => labelOf(child, depth + 1)).join(' ');
+  return labelOf((node.props || {}).children, depth + 1);
+}
+
+/* Mount with live hooks: render, then re-render while any setter fired. */
+function settle(renderRoot, reset) {
+  if (reset) hookStores.clear();
+  mounting = true;
+  try {
+    let sink = walk(runComponent(renderRoot, null));
+    for (let pass = 0; pass < 8; pass += 1) {
+      let dirty = false;
+      for (const store of hookStores.values()) {
+        if (store.dirty) dirty = true;
+        store.dirty = false;
+      }
+      if (!dirty) break;
+      sink = walk(runComponent(renderRoot, null));
+    }
+    return sink;
+  } finally {
+    mounting = false;
+    activeStore = null;
+  }
+}
+
+function mountWalk(renderRoot) {
+  return settle(renderRoot, true);
+}
+
+function rerender(renderRoot) {
+  return settle(renderRoot, false);
 }
 
 /* Find the timeline track: the flex row whose children are all ratio-buttons. */
@@ -234,7 +315,10 @@ const ResponsePanel = internals.ResponsePanel;
 
 /* a) single call: no tab strip, no step list, chips + JSON visible */
 const one = walk(DialogBody({ payload: payload([makeCall(1, 1, 7, 14056)]) }));
-expect(!one.classes.some((c) => c.includes('dsh-pl-tab')), 'tab strip rendered for a single call');
+expect(
+  one.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-tab')).length === 1,
+  'a single call should still show its one step card (that is where the side pair lives)',
+);
 expect(!one.classes.some((c) => c.includes('dsh-pl-step')), 'step list rendered for a single call');
 expect(one.text.join(' ').includes('deepseek-v4.1-flash'), 'model chip missing');
 expect(one.text.join(' ').includes('messages'), 'JSON body not rendered');
@@ -672,97 +756,104 @@ expect(
   'a missing response object did not say so',
 );
 
-/* The switch itself: three halves, exactly one active, reached from the dialog. */
-const switchWalk = walk(DialogBody({ payload: payload([makeCall(1, 1, 3, 100)]) }));
-const segClasses = switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg'));
-expect(segClasses.length === 3, 'expected a request/response/network switch, got ' + segClasses.length);
+/* o) One 请求 / 响应 pair per step: the side belongs to the step being looked at,
+      so there is no switch above the JSON and no second step picker for the
+      other half. Picking a side picks the step with it. */
+
+/* A single step still shows its pair — that is the only control left. */
+const singleSink = mountWalk(() => DialogBody({ payload: payload([makeCall(1, 1, 7, 14056)]) }));
+const singleSides = singleSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side'));
+expect(singleSides.length === 2, 'a single step should still show 请求 + 响应, got ' + singleSides.length);
 expect(
-  switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg-on')).length === 1,
-  'exactly one half of the switch should be active',
+  singleSides.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
+  'exactly one side should be selected',
 );
 expect(
-  /请求|Request/.test(switchWalk.text.join(' ')) && /响应|Response/.test(switchWalk.text.join(' ')),
-  'switch halves are not labelled',
+  /请求|Request/.test(singleSink.text.join(' ')) && /响应|Response/.test(singleSink.text.join(' ')),
+  'the side pair is not labelled',
 );
-expect(/网络|Network/.test(switchWalk.text.join(' ')), 'the network half is not labelled');
+expect(
+  !singleSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-seg')),
+  'a switch is still rendered above the JSON',
+);
 
-/* o) network view: one row per call, a totals row, a status per outcome, and a
-      click that selects that call. */
-const NetworkPanel = internals.networkPanel();
-expect(typeof NetworkPanel === 'function', 'NetworkPanel not exposed');
+/* Three steps: one pair each, still exactly one selected side. */
+const sideCalls = [makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)];
+const threeSideSink = mountWalk(() => DialogBody({ payload: payload(sideCalls) }));
+const pairCount = threeSideSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side')).length;
+expect(pairCount === 6, 'expected one 请求/响应 pair per step, got ' + pairCount);
+expect(
+  threeSideSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
+  'the selected side should be exactly one across all steps',
+);
 
-const calledBack = [];
-const networkCalls = [makeCall(1, 1, 120, 14056), makeCall(2, 2, 121, 20100), makeCall(3, 3, 122, 3000)];
-networkCalls[0].meta.response = {
+/* A step whose call never got a reply marks its 响应 button as empty. */
+sideCalls[2].meta.response = { finish: null, attempts: [], timing: null, stats: null, body: null };
+const offSink = mountWalk(() => DialogBody({ payload: payload(sideCalls) }));
+expect(
+  offSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-side-off')),
+  'a step without a reply does not mark its 响应 button',
+);
+
+/* Clicking 响应 on step 2 selects that step AND that side in one gesture: the
+   reply replaces the request in the same pane. */
+sideCalls[1].meta.response = {
   finish: { kind: 'tool-calls', failure: null },
-  attempts: [{ seq: 1, time: 0, finish: { kind: 'tool-calls', failure: null } }],
+  attempts: [],
   timing: { ttfbMs: 412, spanMs: 2600, records: 12 },
   stats: { textChars: 10, reasoningChars: 0, toolCalls: 1, blocks: 2 },
-  body: { model: 'x', choices: [] },
+  body: {
+    id: 'chatcmpl-smoke',
+    object: 'chat.completion',
+    model: 'deepseek-v4.1-flash',
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read', arguments: '{"a":1}' } }],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: { prompt_tokens: 200, completion_tokens: 20, total_tokens: 220, prompt_tokens_details: { cached_tokens: 0 } },
+  },
 };
-/* The middle call failed twice (one retry): red status, retry counted, no body. */
-const failure = { code: 'SERVER', status: 502, message: 'upstream unavailable' };
-networkCalls[1].meta.response = {
-  finish: { kind: 'error', failure: failure },
-  attempts: [
-    { seq: 2, time: 0, finish: { kind: 'error', failure: failure } },
-    { seq: 3, time: 10, finish: { kind: 'error', failure: failure } },
-  ],
-  timing: { ttfbMs: null, spanMs: 900, records: 2 },
-  stats: null,
-  body: null,
-};
-/* The last call never answered: no finish, no usage, so its cells are dashes. */
-networkCalls[2].meta.response = { finish: null, attempts: [], timing: null, stats: null, body: null };
-networkCalls[2].meta.usage = null;
 
-const networkElement = NetworkPanel({
-  calls: networkCalls,
-  selected: 1,
-  onSelect: (position) => calledBack.push(position),
-});
-const networkWalk = walkAll(networkElement);
-const networkText = networkWalk.text.join(' ');
+const gestureRoot = () => DialogBody({ payload: payload(sideCalls) });
+const beforeSink = mountWalk(gestureRoot);
+const responseButtons = beforeSink.buttons.filter((node) => /^(响应|Response)$/.test(labelOf(node, 0).trim()));
+expect(responseButtons.length === 3, 'expected one 响应 button per step, got ' + responseButtons.length);
+/* Request side is what the button promised, so it is what opens. */
+/* The reply half is the one that reports a first byte, so that label is the
+   marker for "which side is up" — the request half never carries it. */
+const replyOpen = (sink) => /首字节|first byte/.test(sink.text.join(' '));
+expect(!replyOpen(beforeSink), 'the dialog did not open on the request side');
 
+if (responseButtons[1]) responseButtons[1].props.onClick();
+const afterSink = rerender(gestureRoot);
+const afterText = afterSink.text.join(' ');
+expect(replyOpen(afterSink), 'the request side is still on screen after clicking 响应');
+expect(/chatcmpl-smoke/.test(afterText), 'the reply body did not replace the request body');
 expect(
-  networkWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-netrow')).length === 3,
-  'expected 3 network rows',
+  afterSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
+  'the selected side should still be exactly one after switching',
 );
-expect(
-  networkWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-netrow-on')).length === 1,
-  'exactly one network row should be marked active',
-);
-expect(/#1/.test(networkText) && /#2/.test(networkText) && /#3/.test(networkText), 'network rows lost their index');
-expect(/要求调用工具|tool calls/i.test(networkText), 'a tool-call finish is not shown as such');
-expect(/失败|failed/i.test(networkText), 'the failed call is not shown as failed');
-expect(/本轮合计|turn total/i.test(networkText), 'network table has no totals row');
-/* 14,056 + 20,100 tokens over the two metered calls. */
-expect(/34,156|34\.2k|34156/.test(networkText), 'totals row does not sum the metered calls: ' + networkText);
-expect(/—/.test(networkText), 'a call without usage/finish should render dashes');
 
-/* Rows answer the keyboard, not just the mouse. */
-const findRow = (node) => {
-  if (!node || typeof node !== 'object') return null;
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const hit = findRow(child);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  if (node.type === 'tr' && node.props && node.props.tabIndex === 0) return node;
-  return findRow(node.props ? node.props.children : null);
-};
-const firstRow = findRow(networkElement);
-expect(!!firstRow, 'network rows are not focusable');
-if (firstRow) {
-  firstRow.props.onClick();
-  expect(calledBack.length === 1 && calledBack[0] === 0, 'clicking a row did not select it');
-}
+/* ...and clicking 请求 on the same step goes back, without losing the step. */
+const requestButtons = afterSink.buttons.filter((node) => /^(请求|Request)$/.test(labelOf(node, 0).trim()));
+if (requestButtons[1]) requestButtons[1].props.onClick();
+const backSink = rerender(gestureRoot);
+expect(!replyOpen(backSink), 'switching back to 请求 did not restore the request body');
+expect(
+  /"messages"|messages/.test(backSink.text.join(' ')),
+  'the JSON tree is gone after switching back',
+);
 
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=network');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=step-sides');
 if (problems.length === 0) {
   console.log('=== render smoke ok: 15 scenarios, no problem(s) ===');
 } else {

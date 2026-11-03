@@ -129,7 +129,7 @@ window.__ModuleLoader__.load({
           /* 响应侧：这一屏回答"模型回了什么"，与请求侧一一对应。 */
           viewRequest: '请求',
           viewResponse: '响应',
-          viewTitle: '切换查看这次调用发出去的请求体、它收到的回复，或这一轮所有调用的网络总览',
+          viewTitle: '每一步右边都能切换：看这一步发出去的请求体，或它收到的回复',
           responseNone: '日志里没有这次调用的回复记录（可能被中断或仍在流式返回）。',
           finishLabel: '结束原因',
           finishStop: '正常结束',
@@ -153,26 +153,6 @@ window.__ModuleLoader__.load({
           attemptsTitle: '同一步里失败的尝试；每一次都以一个 finish 分块结束，成功的那次不算在内。',
           attemptNo: '尝试 ',
           responseShapeTitle: '这一屏按 OpenAI chat-completion 的形态重建了响应，方便直接复制。',
-          /* 网络总览：一条调用一行，用来回答「这一轮花了多少、哪一步失败了」。 */
-          viewNetwork: '网络',
-          netCopy: '复制表格',
-          netEmpty: '这一轮没有记录到调用。',
-          netNoCol: '#',
-          netStepCol: 'step',
-          netStatusCol: '状态',
-          netMessagesCol: '消息',
-          netInputCol: '输入',
-          netCacheCol: '缓存',
-          netOutputCol: '输出',
-          netTotalCol: '合计',
-          netTtfbCol: '首字节',
-          netSpanCol: '总时长',
-          netRetriesCol: '重试',
-          netRowTitle: '看这次调用的回复',
-          netTotalRow: '本轮合计',
-          netErrors: '失败',
-          netSummaryTitle: '这一轮每一次调用的状态、耗时与 token；点任意一行看它的回复。',
-          netCopied: '已复制表格',
         }
       : {
           show: 'Request / response',
@@ -271,7 +251,7 @@ window.__ModuleLoader__.load({
           noUsage: 'no usage',
           viewRequest: 'Request',
           viewResponse: 'Response',
-          viewTitle: 'Switch between the request, the reply, and the whole call list of this turn',
+          viewTitle: 'Every step has both sides: the request it sent, and the reply it got',
           responseNone: 'No reply recorded for this call in the log (interrupted, or still streaming).',
           finishLabel: 'finish',
           finishStop: 'stopped',
@@ -296,25 +276,6 @@ window.__ModuleLoader__.load({
             'Failed attempts in this step; each ends with a finish chunk. The successful one is not counted.',
           attemptNo: 'attempt ',
           responseShapeTitle: 'This view rebuilds the reply in OpenAI chat-completion shape so it can be copied.',
-          viewNetwork: 'Network',
-          netCopy: 'Copy table',
-          netEmpty: 'No model call recorded for this turn.',
-          netNoCol: '#',
-          netStepCol: 'step',
-          netStatusCol: 'status',
-          netMessagesCol: 'msgs',
-          netInputCol: 'input',
-          netCacheCol: 'cache',
-          netOutputCol: 'output',
-          netTotalCol: 'total',
-          netTtfbCol: 'first byte',
-          netSpanCol: 'span',
-          netRetriesCol: 'retries',
-          netRowTitle: 'Open this call’s reply',
-          netTotalRow: 'turn total',
-          netErrors: 'failed',
-          netSummaryTitle: 'Every call in this turn: status, timing and tokens. Click a row to read its reply.',
-          netCopied: 'Table copied',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -459,88 +420,74 @@ window.__ModuleLoader__.load({
       },
       chipErrorValue: { color: 'var(--dsw-alias-danger, #b42318)' },
 
-      /* ---- request / response switch: two states, one segmented control ---- */
-      viewSwitch: {
+      /* ---- the 请求 / 响应 pair on every step row ---- */
+      sides: {
         display: 'inline-flex',
         alignItems: 'center',
         gap: '2px',
-        padding: '2px',
-        borderRadius: '8px',
         flex: '0 0 auto',
-        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.08))',
+        marginLeft: 'auto',
+        paddingLeft: '8px',
+        /* The pair is a second target inside the card, so it must not swallow
+           clicks meant for the card itself. */
+        position: 'relative',
+        zIndex: 1,
       },
-      segBtn: {
+      sideBtn: {
         font: 'inherit',
-        fontSize: '12px',
-        lineHeight: '20px',
-        fontWeight: 600,
-        height: '24px',
-        padding: '0 10px',
-        border: 'none',
+        fontSize: '11px',
+        lineHeight: '18px',
+        fontWeight: '600',
+        height: '20px',
+        padding: '0 7px',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.32))',
         borderRadius: '6px',
         background: 'transparent',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+        color: 'var(--dsw-alias-label-tertiary, #81858c)',
         cursor: 'pointer',
         boxSizing: 'border-box',
+        whiteSpace: 'nowrap',
       },
-      segBtnActive: {
+      sideBtnOff: {
+        /* A step whose call never got a reply: the side exists but is empty. */
+        opacity: 0.55,
+      },
+      sideBtnActive: {
+        borderColor: 'var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
         background: 'var(--dsw-alias-bg-overlay, #ffffff)',
-        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
-        boxShadow: 'inset 0 0 0 1px var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
+        color: 'var(--dsw-alias-brand-primary, #2f6fed)',
       },
 
-      /* ---- network view: one row per call, so a whole turn is scannable ---- */
-      netWrap: {
+      /* The card body is a button so a card is one tab stop, not three. */
+      tabHit: {
+        font: 'inherit',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: '2px',
         flex: '1 1 auto',
-        minHeight: 0,
-        overflow: 'auto',
-        padding: '0 14px 14px',
-      },
-      netTable: {
-        width: '100%',
-        borderCollapse: 'collapse',
-        fontFamily: FONT_MONO,
-        fontSize: '12.5px',
-        lineHeight: '1.5',
-      },
-      netHeadCell: {
-        position: 'sticky',
-        top: 0,
-        zIndex: 1,
-        padding: '6px 8px',
+        minWidth: 0,
+        padding: 0,
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
         textAlign: 'left',
-        fontWeight: '500',
-        whiteSpace: 'nowrap',
-        color: 'var(--dsw-alias-label-tertiary, #81858c)',
-        background: 'var(--dsw-alias-bg-base, #ffffff)',
-      },
-      netRow: {
         cursor: 'pointer',
-        borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.16))',
       },
-      netRowActive: {
-        background: 'var(--dsw-alias-interactive-bg-hover, #2631480f)',
-      },
-      netCell: {
-        padding: '6px 8px',
-        whiteSpace: 'nowrap',
-        fontVariantNumeric: 'tabular-nums',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-      },
-      netFootCell: {
-        padding: '8px',
-        fontWeight: '600',
-        whiteSpace: 'nowrap',
-        borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.4))',
-        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
-      },
-      netDot: {
-        display: 'inline-block',
-        width: '6px',
-        height: '6px',
-        marginRight: '5px',
-        borderRadius: '999px',
-        verticalAlign: 'middle',
+      stepHit: {
+        font: 'inherit',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: '1px',
+        flex: '1 1 auto',
+        minWidth: 0,
+        padding: 0,
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
       },
 
       /* ---- response side: the retry list sits above the rebuilt body ---- */
@@ -2546,11 +2493,6 @@ window.__ModuleLoader__.load({
         },
         Timeline: Timeline,
         ResponsePanel: ResponsePanel,
-        /* `NetworkPanel` is declared below this hook (it reuses `finishLabelOf`),
-           so the hook hands out a thunk for it, like `boundary` above. */
-        networkPanel: function networkPanel() {
-          return NetworkPanel;
-        },
         finishOfStream: finishOfStream,
         timingOfStream: timingOfStream,
         contentStatsOf: contentStatsOf,
@@ -2672,15 +2614,15 @@ window.__ModuleLoader__.load({
       '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
-      /* The request/response switch: the active half is styled inline, so only the
-         inactive half needs a hover affordance. */
-      '.dsh-pl-seg:not(.dsh-pl-seg-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
+      /* The 请求 / 响应 pair inside a step row: only the half that is not already
+         selected needs a hover affordance. */
+      '.dsh-pl-side:not(.dsh-pl-side-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
       'color:var(--dsw-alias-label-primary,#111827)}',
-      '.dsh-pl-seg:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
-      /* Network rows are clickable list rows: hover on inactive rows, a visible
-         focus ring for the keyboard path, and no text cursor. */
-      '.dsh-pl-netrow:not(.dsh-pl-netrow-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
-      '.dsh-pl-netrow:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
+      '.dsh-pl-side:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      /* A side with nothing behind it (the call never got a reply) reads as muted. */
+      '.dsh-pl-side-off{opacity:.55}',
+      /* The card/row body is itself a button; it must not paint its own frame. */
+      '.dsh-pl-tabhit:focus-visible,.dsh-pl-stephit:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:2px;border-radius:6px}',
       /* The source legend's family chips are navigation pills, not list rows:
          they borrow the hover rules but must not be counted as step-list rows. */
       '.dsh-pl-pill{border-radius:999px}',
@@ -3763,173 +3705,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /**
-     * The network view: one row per model call in the Turn.
-     *
-     * This answers what the two JSON views cannot answer at a glance — how many
-     * calls the Turn made, which one failed, how long each took, and where the
-     * tokens went. Rows are built from the same `meta` objects the other views
-     * use, so this screen captures nothing extra; clicking a row selects that
-     * call and flips to its reply.
-     */
-    function NetworkPanel(props) {
-      const pal = props.pal || PALETTES.light;
-      const calls = Array.isArray(props.calls) ? props.calls : [];
-      const selected = typeof props.selected === 'number' ? props.selected : 0;
-      if (!calls.length) return h('div', { style: STYLE.note }, TEXT.netEmpty);
-
-      const num = { textAlign: 'right' };
-      const headRight = Object.assign({}, STYLE.netHeadCell, num);
-      const cellRight = Object.assign({}, STYLE.netCell, num);
-      const footRight = Object.assign({}, STYLE.netFootCell, num);
-      const columns = [
-        { key: 'no', label: TEXT.netNoCol },
-        { key: 'step', label: TEXT.netStepCol, right: true },
-        { key: 'status', label: TEXT.netStatusCol },
-        { key: 'messages', label: TEXT.netMessagesCol, right: true },
-        { key: 'input', label: TEXT.netInputCol, right: true },
-        { key: 'cache', label: TEXT.netCacheCol, right: true },
-        { key: 'output', label: TEXT.netOutputCol, right: true },
-        { key: 'total', label: TEXT.netTotalCol, right: true },
-        { key: 'ttfb', label: TEXT.netTtfbCol, right: true },
-        { key: 'span', label: TEXT.netSpanCol, right: true },
-        { key: 'retries', label: TEXT.netRetriesCol, right: true },
-      ];
-
-      const head = h(
-        'thead',
-        { key: 'head' },
-        h(
-          'tr',
-          { key: 'row' },
-          columns.map((column) =>
-            h(
-              'th',
-              { key: column.key, scope: 'col', style: column.right ? headRight : STYLE.netHeadCell },
-              column.label,
-            ),
-          ),
-        ),
-      );
-
-      const totals = { input: 0, cache: 0, output: 0, total: 0, errors: 0, retries: 0 };
-      const rows = [];
-      const dash = '—';
-
-      for (let index = 0; index < calls.length; index += 1) {
-        const call = calls[index] || {};
-        const meta = call.meta || {};
-        const response = meta.response || null;
-        const finish = response ? response.finish : null;
-        const kind = finish && finish.kind ? finish.kind : '';
-        const failure = finish && finish.failure ? finish.failure : null;
-        const usage = meta.usage || null;
-        const timing = response ? response.timing : null;
-        const attemptCount = response && Array.isArray(response.attempts) ? response.attempts.length : 0;
-        const retries = attemptCount > 1 ? attemptCount - 1 : 0;
-        const requestMessages = call.request && Array.isArray(call.request.messages) ? call.request.messages.length : 0;
-        const inputTokens = usage ? usage.input || 0 : 0;
-        const cacheTokens = usage ? usage.cache || 0 : 0;
-        const outputTokens = usage ? usage.output || 0 : 0;
-        const totalTokens = usage ? usage.total || 0 : 0;
-
-        totals.input += inputTokens;
-        totals.cache += cacheTokens;
-        totals.output += outputTokens;
-        totals.total += totalTokens;
-        totals.retries += retries;
-        if (kind === 'error') totals.errors += 1;
-
-        /* Colour says everything before a single word is read: red failed, green
-           finished cleanly, blue still wants tools, grey unknown/aborted. */
-        const dotColour =
-          kind === 'error'
-            ? pal.toolErr
-            : kind === 'stop'
-              ? pal.toolOk
-              : kind === 'tool-calls'
-                ? pal.currentBorder
-                : kind === 'aborted' || kind === 'interrupted'
-                  ? pal.number
-                  : pal.nil;
-        const statusTitle = failure
-          ? TEXT.finishTitle +
-            ' ' +
-            (failure.code || 'ERROR') +
-            (failure.status === null || failure.status === undefined ? '' : ' ' + failure.status) +
-            (failure.message ? ' · ' + failure.message : '')
-          : TEXT.finishTitle;
-        const active = index === selected;
-
-        rows.push(
-          h(
-            'tr',
-            {
-              key: 'row-' + index,
-              className: active ? 'dsh-pl-netrow dsh-pl-netrow-on' : 'dsh-pl-netrow',
-              style: active ? Object.assign({}, STYLE.netRow, STYLE.netRowActive) : STYLE.netRow,
-              tabIndex: 0,
-              title: TEXT.netRowTitle,
-              onClick: () => props.onSelect(index),
-              onKeyDown: (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  props.onSelect(index);
-                }
-              },
-            },
-            h('td', { key: 'no', style: STYLE.netCell }, '#' + (typeof meta.index === 'number' ? meta.index : index + 1)),
-            h('td', { key: 'step', style: cellRight }, meta.step === undefined ? dash : String(meta.step)),
-            h(
-              'td',
-              { key: 'status', style: STYLE.netCell, title: statusTitle },
-              h('span', { key: 'dot', style: Object.assign({}, STYLE.netDot, { background: dotColour }) }),
-              finishLabelOf(kind),
-            ),
-            h('td', { key: 'messages', style: cellRight }, requestMessages ? formatExact(requestMessages) : dash),
-            h('td', { key: 'input', style: cellRight }, usage ? formatTokens(inputTokens) : dash),
-            h('td', { key: 'cache', style: cellRight }, usage ? formatTokens(cacheTokens) : dash),
-            h('td', { key: 'output', style: cellRight }, usage ? formatTokens(outputTokens) : dash),
-            h('td', { key: 'total', style: cellRight }, usage ? formatTokens(totalTokens) : dash),
-            h(
-              'td',
-              { key: 'ttfb', style: cellRight },
-              timing && timing.ttfbMs !== null && timing.ttfbMs !== undefined ? formatMs(timing.ttfbMs) : dash,
-            ),
-            h(
-              'td',
-              { key: 'span', style: cellRight },
-              timing && timing.spanMs !== null && timing.spanMs !== undefined ? formatMs(timing.spanMs) : dash,
-            ),
-            h('td', { key: 'retries', style: cellRight }, retries ? String(retries) : dash),
-          ),
-        );
-      }
-
-      const foot = h(
-        'tfoot',
-        { key: 'foot' },
-        h(
-          'tr',
-          { key: 'row' },
-          h('td', { key: 'label', style: STYLE.netFootCell, colSpan: 4 }, TEXT.netTotalRow),
-          h('td', { key: 'input', style: footRight }, formatTokens(totals.input)),
-          h('td', { key: 'cache', style: footRight }, formatTokens(totals.cache)),
-          h('td', { key: 'output', style: footRight }, formatTokens(totals.output)),
-          h('td', { key: 'total', style: footRight }, formatTokens(totals.total)),
-          h('td', { key: 'errors', style: footRight }, totals.errors ? totals.errors + ' ' + TEXT.netErrors : dash),
-          h('td', { key: 'blank', style: STYLE.netFootCell }, ''),
-          h('td', { key: 'retries', style: footRight }, totals.retries ? String(totals.retries) : dash),
-        ),
-      );
-
-      return h(
-        'div',
-        { style: STYLE.netWrap },
-        h('table', { key: 'table', style: STYLE.netTable }, head, h('tbody', { key: 'body' }, rows), foot),
-      );
-    }
-
     function DialogBody(props) {
       const payload = props.payload;
       const calls = payload.data && Array.isArray(payload.data.calls) ? payload.data.calls : [];
@@ -3939,8 +3714,10 @@ window.__ModuleLoader__.load({
       const [mode, setMode] = React.useState('default');
       const [flash, setFlash] = React.useState('');
       /* One dialog, two halves of the exchange: the request that was sent, and
-         the reply it got. Request first — it is what the button promised. */
-      const [view, setView] = React.useState('request');
+         the reply it got. The side belongs to the selected step — each step row
+         carries its own 请求/响应 pair — so switching step and switching side are
+         the same gesture, and no step is ever picked twice for two halves. */
+      const [side, setSide] = React.useState('request');
       const bodyRef = React.useRef(null);
 
       /* The payload is far taller than the viewport, so both a draggable scrollbar
@@ -3994,7 +3771,7 @@ window.__ModuleLoader__.load({
           }
           node.scrollTop = 0;
         },
-        [index, mode, view],
+        [index, mode, side],
       );
 
       const flashDone = (label) => () => {
@@ -4008,7 +3785,7 @@ window.__ModuleLoader__.load({
         try {
           /* Copy what is on screen: the request when the request tab is open, the
              rebuilt response when the response tab is. */
-          text = JSON.stringify(view === 'response' && meta.response ? meta.response.body : call.request, null, 2);
+          text = JSON.stringify(side === 'response' && meta.response ? meta.response.body : call.request, null, 2);
         } catch (err) {
           text = String(err);
         }
@@ -4021,7 +3798,7 @@ window.__ModuleLoader__.load({
         try {
           text = JSON.stringify(
             calls.map((item) => {
-              if (view !== 'response') return item.request;
+              if (side !== 'response') return item.request;
               const itemResponse = item.meta && item.meta.response;
               return itemResponse ? itemResponse.body : null;
             }),
@@ -4032,54 +3809,6 @@ window.__ModuleLoader__.load({
           text = String(err);
         }
         copyText(text, flashDone('all'));
-      };
-
-      /* The network table as TSV: pastes straight into a spreadsheet, which is
-         what a "how expensive was this turn" question usually turns into. */
-      const copyTable = () => {
-        if (!callCount) return;
-        const header = [
-          TEXT.netNoCol,
-          TEXT.netStepCol,
-          TEXT.netStatusCol,
-          TEXT.netMessagesCol,
-          TEXT.netInputCol,
-          TEXT.netCacheCol,
-          TEXT.netOutputCol,
-          TEXT.netTotalCol,
-          TEXT.netTtfbCol,
-          TEXT.netSpanCol,
-          TEXT.netRetriesCol,
-        ];
-        const lines = [header.join('\t')];
-        for (let position = 0; position < callCount; position += 1) {
-          const item = calls[position] || {};
-          const itemMeta = item.meta || {};
-          const itemResponse = itemMeta.response || null;
-          const itemFinish = itemResponse ? itemResponse.finish : null;
-          const itemUsage = itemMeta.usage || null;
-          const itemTiming = itemResponse ? itemResponse.timing : null;
-          const itemAttempts =
-            itemResponse && Array.isArray(itemResponse.attempts) ? itemResponse.attempts.length : 0;
-          const itemMessages =
-            item.request && Array.isArray(item.request.messages) ? item.request.messages.length : 0;
-          lines.push(
-            [
-              '#' + (typeof itemMeta.index === 'number' ? itemMeta.index : position + 1),
-              itemMeta.step === undefined ? '' : String(itemMeta.step),
-              finishLabelOf(itemFinish && itemFinish.kind ? itemFinish.kind : ''),
-              String(itemMessages),
-              itemUsage ? String(itemUsage.input || 0) : '',
-              itemUsage ? String(itemUsage.cache || 0) : '',
-              itemUsage ? String(itemUsage.output || 0) : '',
-              itemUsage ? String(itemUsage.total || 0) : '',
-              itemTiming && typeof itemTiming.ttfbMs === 'number' ? String(itemTiming.ttfbMs) : '',
-              itemTiming && typeof itemTiming.spanMs === 'number' ? String(itemTiming.spanMs) : '',
-              itemAttempts > 1 ? String(itemAttempts - 1) : '0',
-            ].join('\t'),
-          );
-        }
-        copyText(lines.join('\n'), flashDone('table'));
       };
 
       const chip = (key, label, value, accent, title, variant) => {
@@ -4238,37 +3967,6 @@ window.__ModuleLoader__.load({
         respChips.push(chip('none', null, TEXT.responseNone));
       }
 
-      /* Network view: the table carries the detail, so the header summarises the
-         Turn instead of describing one call. */
-      const netView = view === 'network';
-      const netChips = [];
-      if (netView) {
-        let netTotal = 0;
-        let netErrors = 0;
-        let netRetries = 0;
-        for (let position = 0; position < callCount; position += 1) {
-          const itemMeta = (calls[position] || {}).meta || {};
-          const itemResponse = itemMeta.response || null;
-          if (itemMeta.usage) netTotal += itemMeta.usage.total || 0;
-          if (itemResponse && itemResponse.finish && itemResponse.finish.kind === 'error') netErrors += 1;
-          const itemAttempts =
-            itemResponse && Array.isArray(itemResponse.attempts) ? itemResponse.attempts.length : 0;
-          if (itemAttempts > 1) netRetries += itemAttempts - 1;
-        }
-        netChips.push(chip('calls', null, formatExact(callCount) + ' ' + TEXT.callsShort, false, TEXT.netSummaryTitle));
-        if (netErrors) {
-          netChips.push(
-            chip('errors', null, netErrors + ' ' + TEXT.netErrors, false, TEXT.netSummaryTitle, 'error'),
-          );
-        }
-        if (netRetries) {
-          netChips.push(
-            chip('retries', TEXT.netRetriesCol, String(netRetries), false, TEXT.netSummaryTitle, 'warn'),
-          );
-        }
-        netChips.push(chip('total', TEXT.netTotalCol, formatExact(netTotal), true, TEXT.netSummaryTitle));
-      }
-
       const header = h(
         'div',
         { key: 'header', style: STYLE.dialogHeader },
@@ -4278,66 +3976,8 @@ window.__ModuleLoader__.load({
           h('span', { key: 'title', style: STYLE.dialogTitle }, payload.title),
           h(
             'div',
-            { key: 'views', style: STYLE.viewSwitch, title: TEXT.viewTitle, role: 'tablist' },
-            h(
-              'button',
-              {
-                key: 'req',
-                type: 'button',
-                role: 'tab',
-                'aria-selected': view === 'request' ? 'true' : 'false',
-                className: view === 'request' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
-                onClick: () => setView('request'),
-                style: Object.assign({}, STYLE.segBtn, view === 'request' ? STYLE.segBtnActive : null),
-              },
-              TEXT.viewRequest,
-            ),
-            h(
-              'button',
-              {
-                key: 'res',
-                type: 'button',
-                role: 'tab',
-                'aria-selected': view === 'response' ? 'true' : 'false',
-                className: view === 'response' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
-                onClick: () => setView('response'),
-                style: Object.assign({}, STYLE.segBtn, view === 'response' ? STYLE.segBtnActive : null),
-              },
-              TEXT.viewResponse,
-            ),
-            h(
-              'button',
-              {
-                key: 'net',
-                type: 'button',
-                role: 'tab',
-                'aria-selected': view === 'network' ? 'true' : 'false',
-                className: view === 'network' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
-                onClick: () => setView('network'),
-                style: Object.assign({}, STYLE.segBtn, view === 'network' ? STYLE.segBtnActive : null),
-              },
-              TEXT.viewNetwork,
-            ),
-          ),
-          h(
-            'div',
             { key: 'actions', style: STYLE.headerActions },
-            /* The ↑/↓ jump keys, per-call copy and the tree expansion only mean
-               something while a JSON tree is on screen; the network table swaps
-               them for a single "copy table". */
-            netView
-              ? h(
-                  'button',
-                  {
-                    key: 'copy-table',
-                    type: 'button',
-                    className: 'dsh-pl-btn',
-                    onClick: copyTable,
-                    style: STYLE.smallButton,
-                  },
-                  flash === 'table' ? TEXT.netCopied : TEXT.netCopy,
-                )
-              : [
+            [
                   h(
                     'button',
                     {
@@ -4415,12 +4055,12 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h('div', { key: 'row-meta', style: STYLE.chips }, netView ? netChips : view === 'response' ? respChips : metaChips),
-        netView ? null : h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
+        h('div', { key: 'row-meta', style: STYLE.chips }, side === 'response' ? respChips : metaChips),
+        h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
         /* Diff and source breakdown describe the REQUEST; the reply has no
            equivalent, so they fold away on the response tab instead of lying. */
-        call && view === 'request' ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
-        callCount > 1 && !netView
+        call && side === 'request' ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
+        callCount > 1
           ? h(Timeline, {
               key: 'row-timeline',
               calls: calls,
@@ -4429,7 +4069,7 @@ window.__ModuleLoader__.load({
               pal: pal,
             })
           : null,
-        call && view === 'request'
+        call && side === 'request'
           ? h(SourcePanel, {
               key: 'row-sources',
               sources: meta.sources,
@@ -4440,51 +4080,117 @@ window.__ModuleLoader__.load({
           : null,
       );
 
-      /* Tabs while they still fit; a step list beyond TAB_LIMIT. */
+      /* Every step row carries its own 请求 / 响应 pair. The side belongs to the
+         step you are looking at, so there is no switch on top of the dialog and
+         no second step picker for the other half: picking a side picks the step
+         too. A one-call Turn still shows its single row, which is where the pair
+         lives when there is nothing to pick. */
+      const pickSide = (position, next) => {
+        setSelected(position);
+        setSide(next);
+      };
+
+      const renderSides = (position, itemMeta) => {
+        const active = position === index;
+        const hasReply = Boolean(itemMeta && itemMeta.response);
+        const requestOn = active && side === 'request';
+        const responseOn = active && side === 'response';
+        return h(
+          'span',
+          { key: 'sides', style: STYLE.sides },
+          h(
+            'button',
+            {
+              key: 'req',
+              type: 'button',
+              'aria-pressed': requestOn ? 'true' : 'false',
+              className: requestOn ? 'dsh-pl-side dsh-pl-side-on' : 'dsh-pl-side',
+              onClick: () => pickSide(position, 'request'),
+              style: Object.assign({}, STYLE.sideBtn, requestOn ? STYLE.sideBtnActive : null),
+            },
+            TEXT.viewRequest,
+          ),
+          h(
+            'button',
+            {
+              key: 'res',
+              type: 'button',
+              'aria-pressed': responseOn ? 'true' : 'false',
+              title: hasReply ? TEXT.viewResponse : TEXT.responseNone,
+              className: responseOn
+                ? 'dsh-pl-side dsh-pl-side-on'
+                : hasReply
+                  ? 'dsh-pl-side'
+                  : 'dsh-pl-side dsh-pl-side-off',
+              onClick: () => pickSide(position, 'response'),
+              style: Object.assign(
+                {},
+                STYLE.sideBtn,
+                hasReply ? null : STYLE.sideBtnOff,
+                responseOn ? STYLE.sideBtnActive : null,
+              ),
+            },
+            TEXT.viewResponse,
+          ),
+        );
+      };
+
+      const stepTitle = (position, itemMeta) =>
+        TEXT.callPrefix +
+        (position + 1) +
+        '/' +
+        callCount +
+        TEXT.callSuffix +
+        ' · step ' +
+        (itemMeta.step !== undefined ? itemMeta.step : position + 1) +
+        (itemMeta.model ? ' · ' + itemMeta.model : '') +
+        (typeof itemMeta.messages === 'number' ? ' · ' + itemMeta.messages + ' ' + TEXT.messages : '') +
+        (typeof itemMeta.tools === 'number' ? ' · ' + itemMeta.tools + ' ' + TEXT.tools : '');
+
       let picker = null;
-      if (!netView && callCount > 1 && callCount <= TAB_LIMIT) {
+      if (callCount <= TAB_LIMIT) {
         picker = h(
           'div',
-          { key: 'tabs', style: STYLE.tabs },
+          { key: 'tabs', style: STYLE.tabs, title: TEXT.viewTitle },
           calls.map((item, position) => {
-                const itemMeta = item.meta || {};
-                const stepLabel = itemMeta.step !== undefined ? itemMeta.step : position + 1;
-                return h(
-                  'button',
-                  {
-                    key: 'call-' + (item.index || position + 1),
-                    type: 'button',
-                    className: position === index ? 'dsh-pl-tab dsh-pl-tab-on' : 'dsh-pl-tab',
-                    onClick: () => setSelected(position),
-                    style: Object.assign({}, STYLE.tab, position === index ? STYLE.tabActive : null),
-                    title:
-                      TEXT.callPrefix +
-                      (position + 1) +
-                      '/' +
-                      callCount +
-                      TEXT.callSuffix +
-                      ' · step ' +
-                      stepLabel +
-                      (itemMeta.model ? ' · ' + itemMeta.model : '') +
-                      (typeof itemMeta.messages === 'number' ? ' · ' + itemMeta.messages + ' ' + TEXT.messages : '') +
-                      (typeof itemMeta.tools === 'number' ? ' · ' + itemMeta.tools + ' ' + TEXT.tools : ''),
-                  },
-                  h('span', { key: 'i', style: STYLE.tabIndex }, '#' + (item.index || position + 1)),
-                  h(
-                    'span',
-                    { key: 'm', style: STYLE.tabMeta },
-                    'step ' +
-                      stepLabel +
-                      ' · ' +
-                      (itemMeta.messages || 0) +
-                      ' ' +
-                      TEXT.messages +
-                      (itemMeta.usage && typeof itemMeta.usage.total === 'number'
-                        ? ' · ' + formatTokens(itemMeta.usage.total)
-                        : ''),
-                  ),
-                );
-              }),
+            const itemMeta = item.meta || {};
+            const stepLabel = itemMeta.step !== undefined ? itemMeta.step : position + 1;
+            const active = position === index;
+            return h(
+              'div',
+              {
+                key: 'call-' + (item.index || position + 1),
+                className: active ? 'dsh-pl-tab dsh-pl-tab-on' : 'dsh-pl-tab',
+                style: Object.assign({}, STYLE.tab, active ? STYLE.tabActive : null),
+              },
+              h(
+                'button',
+                {
+                  key: 'hit',
+                  type: 'button',
+                  className: 'dsh-pl-tabhit',
+                  onClick: () => setSelected(position),
+                  style: STYLE.tabHit,
+                  title: stepTitle(position, itemMeta),
+                },
+                h('span', { key: 'i', style: STYLE.tabIndex }, '#' + (item.index || position + 1)),
+                h(
+                  'span',
+                  { key: 'm', style: STYLE.tabMeta },
+                  'step ' +
+                    stepLabel +
+                    ' · ' +
+                    (itemMeta.messages || 0) +
+                    ' ' +
+                    TEXT.messages +
+                    (itemMeta.usage && typeof itemMeta.usage.total === 'number'
+                      ? ' · ' + formatTokens(itemMeta.usage.total)
+                      : ''),
+                ),
+              ),
+              renderSides(position, itemMeta),
+            );
+          }),
         );
       }
 
@@ -4520,7 +4226,7 @@ window.__ModuleLoader__.load({
       };
 
       let stepList = null;
-      if (!netView && callCount > TAB_LIMIT) {
+      if (callCount > TAB_LIMIT) {
         stepList = h(
           'div',
           {
@@ -4536,69 +4242,54 @@ window.__ModuleLoader__.load({
             const stepLabel = itemMeta.step !== undefined ? itemMeta.step : position + 1;
             const active = position === index;
             return h(
-              'button',
+              'div',
               {
                 key: 'step-' + (item.index || position + 1),
-                ref: (node) => {
-                  stepRefs.current[position] = node;
-                },
-                type: 'button',
                 role: 'option',
                 'aria-selected': active ? 'true' : 'false',
                 className: active ? 'dsh-pl-step dsh-pl-step-on' : 'dsh-pl-step',
-                onClick: () => setSelected(position),
                 style: Object.assign({}, STYLE.stepRow, active ? STYLE.stepRowActive : null),
-                title:
-                  TEXT.callPrefix +
-                  (position + 1) +
-                  '/' +
-                  callCount +
-                  TEXT.callSuffix +
-                  ' · step ' +
-                  stepLabel +
-                  (itemMeta.model ? ' · ' + itemMeta.model : '') +
-                  (typeof itemMeta.messages === 'number'
-                    ? ' · ' + itemMeta.messages + ' ' + TEXT.messages
-                    : ''),
               },
               h(
-                'span',
-                { key: 'top', style: STYLE.stepRowTop },
-                h('span', { key: 'no', style: STYLE.stepNo }, '#' + (item.index || position + 1)),
-                itemMeta.usage && typeof itemMeta.usage.total === 'number'
-                  ? h('span', { key: 'tk', style: STYLE.stepAside }, formatTokens(itemMeta.usage.total))
-                  : null,
+                'button',
+                {
+                  key: 'hit',
+                  ref: (node) => {
+                    stepRefs.current[position] = node;
+                  },
+                  type: 'button',
+                  className: 'dsh-pl-stephit',
+                  onClick: () => setSelected(position),
+                  style: STYLE.stepHit,
+                  title: stepTitle(position, itemMeta),
+                },
+                h(
+                  'span',
+                  { key: 'top', style: STYLE.stepRowTop },
+                  h('span', { key: 'no', style: STYLE.stepNo }, '#' + (item.index || position + 1)),
+                  itemMeta.usage && typeof itemMeta.usage.total === 'number'
+                    ? h('span', { key: 'tk', style: STYLE.stepAside }, formatTokens(itemMeta.usage.total))
+                    : null,
+                ),
+                h(
+                  'span',
+                  { key: 'sub', style: STYLE.stepSub },
+                  'step ' + stepLabel + ' · ' + (itemMeta.messages || 0) + ' ' + TEXT.messages +
+                    (typeof itemMeta.historyEnd === 'number'
+                      ? ' · ' + TEXT.currentTurn + ' ' + ((itemMeta.messages || 0) - itemMeta.historyEnd)
+                      : ''),
+                ),
               ),
-              h(
-                'span',
-                { key: 'sub', style: STYLE.stepSub },
-                'step ' + stepLabel + ' · ' + (itemMeta.messages || 0) + ' ' + TEXT.messages +
-                  (typeof itemMeta.historyEnd === 'number'
-                    ? ' · ' + TEXT.currentTurn + ' ' + ((itemMeta.messages || 0) - itemMeta.historyEnd)
-                    : ''),
-              ),
+              renderSides(position, itemMeta),
             );
           }),
         );
       }
 
-      /* The network table IS the picker — every call is already a row — so the
-         tab strip and the step column step aside to give the table its width. */
-      const body = netView
-        ? h(NetworkPanel, {
-            key: 'net',
-            calls: calls,
-            selected: index,
-            pal: pal,
-            onSelect: (position) => {
-              setSelected(position);
-              setView('response');
-            },
-          })
-        : h(
+      const body = h(
         'div',
         { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody, title: TEXT.railTitle },
-        call && view === 'response'
+        call && side === 'response'
           ? h(ResponsePanel, {
               key: 'resp:' + mode + ':' + index,
               response: response,
@@ -4632,7 +4323,7 @@ window.__ModuleLoader__.load({
       /* Only worth saying when the log carries far more than the model reads — and
          only on the request tab, which is what the note is about. */
       const foot =
-        call && view === 'request' && typeof meta.messages === 'number' && meta.messages > 200
+        call && side === 'request' && typeof meta.messages === 'number' && meta.messages > 200
           ? h('div', { key: 'foot', style: STYLE.dialogFoot }, TEXT.compressNote)
           : null;
 
