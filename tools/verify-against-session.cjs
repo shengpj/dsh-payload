@@ -345,10 +345,176 @@ if (!frameProblems.length)
       longest.turn + ' step ' + longest.step + ' spans ' + longest.span + ' record(s)',
   );
 
+/* Response side: every call must describe the reply that actually followed it.
+   Checked against the log, not against the plugin's own intermediate values:
+   the finish reason, the reply text, the tool-call ids, the usage and the retry
+   count all come from the step's own records, and each of the reply's tool calls
+   must resolve to the result recorded later in the same Turn. */
+const replyProblems = [];
+const replyKinds = new Map();
+let replyCalls = 0;
+let replyBytes = 0;
+let replyFailures = 0;
+const resultCallIds = new Set();
+for (const event of flat) {
+  if (event.type !== 'tool/result') continue;
+  const message = (event.data && event.data.message) || {};
+  const id =
+    message.toolCallId !== undefined
+      ? message.toolCallId
+      : message.source && message.source.callId !== undefined
+        ? message.source.callId
+        : undefined;
+  if (id !== undefined) resultCallIds.add(String(id));
+}
+
+for (const start of flat.filter((event) => event.type === 'turn/start')) {
+  const turn = start.data.turn;
+  const expected = new Map();
+  for (const event of flat) {
+    const data = event.data;
+    if (!data || data.turn !== turn) continue;
+    if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') continue;
+    const step = data.step;
+    const entry = expected.get(step) || {
+      text: '',
+      toolIds: [],
+      usage: null,
+      finish: null,
+      attempts: 0,
+      hasMessage: false,
+    };
+    if (event.type === 'assistant/message') {
+      const blocks = data.message && Array.isArray(data.message.content) ? data.message.content : [];
+      for (const block of blocks) {
+        if (!block) continue;
+        if (block.type === 'text' && typeof block.text === 'string') entry.text += block.text;
+        else if (block.type === 'tool-call' && block.id !== undefined) entry.toolIds.push(String(block.id));
+      }
+      entry.usage = data.usage || null;
+      const finish = api.finishOfStream(data.stream);
+      entry.finish = finish ? finish.kind : null;
+      entry.hasMessage = true;
+    } else {
+      entry.attempts += 1;
+      /* A step can end with attempts only. Then the last attempt that reported a
+         finish is what stopped it — mirroring `lastFinishOf` in the plugin. */
+      if (!entry.hasMessage) {
+        const finish = api.finishOfStream(data.stream);
+        if (finish) entry.finish = finish.kind;
+      }
+    }
+    expected.set(step, entry);
+  }
+
+  const built = api.buildTurnCalls(flat, turn);
+  if (!built) continue;
+  for (const item of built.calls) {
+    const meta = item.meta || {};
+    const response = meta.response;
+    const want = expected.get(meta.step);
+    replyCalls += 1;
+    if (!want) {
+      replyProblems.push('Turn ' + turn + ' #' + item.index + ': no reply record for step ' + meta.step);
+      continue;
+    }
+    if (!response) {
+      replyProblems.push('Turn ' + turn + ' #' + item.index + ': meta.response missing');
+      continue;
+    }
+    const kind = response.finish && response.finish.kind ? response.finish.kind : null;
+    replyKinds.set(kind, (replyKinds.get(kind) || 0) + 1);
+    if (kind !== want.finish) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': finish ' + kind + ' != log ' + want.finish,
+      );
+    }
+    if ((response.attempts || []).length !== want.attempts) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': attempts ' + (response.attempts || []).length +
+          ' != log ' + want.attempts,
+      );
+    }
+    if (!want.hasMessage) {
+      /* A step that never produced a reply must say so instead of inventing one. */
+      if (response.body !== null) {
+        replyProblems.push('Turn ' + turn + ' #' + item.index + ': body for a reply-less step');
+      }
+      if (response.stats !== null) {
+        replyProblems.push('Turn ' + turn + ' #' + item.index + ': stats for a reply-less step');
+      }
+      replyFailures += 1;
+      continue;
+    }
+    if (!response.stats || response.stats.textChars !== want.text.length) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': text chars ' +
+          (response.stats ? response.stats.textChars : 'none') + ' != log ' + want.text.length,
+      );
+    }
+    const choice = response.body && Array.isArray(response.body.choices) ? response.body.choices[0] : null;
+    if (!choice) {
+      replyProblems.push('Turn ' + turn + ' #' + item.index + ': rebuilt body has no choices[0]');
+      continue;
+    }
+    const bodyText = choice.message && choice.message.content !== null && choice.message.content !== undefined
+      ? choice.message.content
+      : '';
+    if (bodyText !== want.text) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': body text ' + bodyText.length + ' != log ' + want.text.length,
+      );
+    }
+    const bodyIds = (choice.message && Array.isArray(choice.message.tool_calls) ? choice.message.tool_calls : [])
+      .map((call) => String(call.id));
+    if (bodyIds.join(',') !== want.toolIds.join(',')) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': body tool_calls [' + bodyIds.join(',') + '] != log [' +
+          want.toolIds.join(',') + ']',
+      );
+    }
+    if (want.usage && meta.usage && typeof meta.usage.total === 'number' && meta.usage.total !== want.usage.totalTokens) {
+      replyProblems.push(
+        'Turn ' + turn + ' #' + item.index + ': body usage ' + meta.usage.total + ' != log ' + want.usage.totalTokens,
+      );
+    }
+    /* A reply's own tool calls must show their outcome, not a `missing` badge. */
+    for (const id of want.toolIds) {
+      if (!resultCallIds.has(id)) continue;
+      const detail = meta.toolDetailsByCallId ? meta.toolDetailsByCallId[id] : null;
+      if (!detail) {
+        replyProblems.push('Turn ' + turn + ' #' + item.index + ': no detail for reply tool call ' + id);
+      } else if (detail.status === 'missing') {
+        replyProblems.push('Turn ' + turn + ' #' + item.index + ': reply tool call ' + id + ' still missing its result');
+      }
+    }
+    replyBytes += response.body ? JSON.stringify(response.body).length : 0;
+  }
+  release(built);
+}
+
+console.log('\n=== responses: ' + replyCalls + ' call(s), ' + replyProblems.length + ' problem(s) ===');
+for (const item of replyProblems.slice(0, 10)) console.log('  ' + item);
+if (!replyProblems.length) {
+  console.log(
+    '  finish reason, reply text, tool-call ids, usage and retry count all match the log; ' +
+      'rebuilt bodies total ' + replyBytes.toLocaleString('en-US') + ' bytes',
+  );
+  console.log(
+    '  finish reasons: ' +
+      [...replyKinds.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([kind, count]) => (kind === null ? 'none' : kind) + '=' + count)
+        .join(', '),
+  );
+  console.log(
+    '  ' + replyFailures + ' step(s) produced no reply at all (attempts only) and report that instead',
+  );
+}
+
 console.log(
   '\n=== turn/current split: ' + splitProblems.length + ' problem(s) ===',
-);
-for (const item of splitProblems.slice(0, 10)) console.log('  ' + item);
+);for (const item of splitProblems.slice(0, 10)) console.log('  ' + item);
 if (!splitProblems.length)
   console.log('  historyEnd stays inside messages, never shrinks, and carries the previous Turn');
 

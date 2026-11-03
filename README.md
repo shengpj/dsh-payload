@@ -27,6 +27,7 @@
 - **上下文来源占比**：弹框底部把这次请求的 `messages` 按来源分成五类并给出条数与占比——你的输入、harness 自动注入（时间上下文、运行时上下文、技能目录、系统提示、后台任务回报…）、模型回复、工具往返。图例默认只有一行，点某一类才展开它由哪些小类组成（例如「自动注入 41」拆成「时间上下文 33 · 运行时上下文 7 · 技能目录 1」）；旁边标出「本轮新增」占多少，用来回答「上下文为什么涨这么快」。占比按**消息字节**算，不是 token。
 - **本轮时间线**：一轮里有多次调用时，头部多一条时间线——一步一段，宽度按该步实际消耗的 token 算（输入 + 缓存 + 输出），点哪段就切到哪次调用，一眼看出这轮的钱花在哪几步；右端是这一轮的总 token。它和下方的 `#1 #2 #3` 标签页 / 左侧 step 列表**分工不重复**：标签页和列表回答「选第几次调用」（并给出条数、step 号），时间线只回答「占比」，所以不再重复印一遍 `#k · step n · token`。工具数、往返数、工具名也都不印——前两个每步恒为「1」，工具名描述的是这一步**产出**的调用，而这套编号指向**请求快照**，混在一起容易误读成「这次请求里有那个调用」。
 - **JSON ↔ 对话互链**：`messages` 里每条消息的行上都常驻一个 `对话 ↗` 小标签（不靠悬停，行高不会因此跳动），点它关掉弹框、并把对话滚动到**这条消息自己的气泡**（精确到 `data-chat-node-key`；气泡在折叠的轮次里没挂载时，退回滚到该轮 `data-chat-turn`）。反方向同理：从某条回复的按钮打开弹框时，那份 JSON 会直接停在**这条回复对应的那一行**并加一圈高亮，不用自己去几百条消息里找。
+- **请求 / 响应两屏**：弹框头部有一个 `请求 | 响应` 开关。请求侧是当时真正发出去的完整 JSON；响应侧回答「模型回了什么」，同样可折叠、可复制：`结束原因`（`要求调用工具` / `正常结束` / `失败` / `被中断`…）、失败重试的每一次尝试（`code` + `status` + `message`，成功的那次不计入重试）、`首字节` / `总时长` / `输出字符` / `推理字符` / `响应体` 字节，以及按 OpenAI chat-completion 形态重建的响应体（`choices[0].message` + `finish_reason` + `usage`，回复带推理内容时额外给出 `reasoning_content`）。响应体里的 `tool_calls` 复用请求侧的工具卡片，`✓ 成功 · 21ms` 这样的徽标直接告诉那次调用后来怎么了。这一步彻底失败、没有任何回复时，响应侧写「日志里没有这次调用的回复记录」并把失败尝试列出来，不伪造一份空回复。
 - **复制**：复制当前那次调用，或「复制全部调用」导出成请求数组。
 - **长文档导航**：JSON 面板右侧是常驻加宽的滚动条，可直接拖拽跳转（覆盖层滚动条太细、会自动淡出）；头部另有「↑ 顶部 / ↓ 末尾」按钮，切换调用或展开/收起后自动回到顶部。
 - `Esc` 或点击遮罩关闭；标签页/step 列表支持鼠标与 ↑/↓/Home/End。
@@ -69,7 +70,8 @@ git clone https://github.com/shengpj/dsh-payload.git
 3. `messages` 默认只展开本轮新产生的消息：更早的历史收在 `历史消息 (n)` 这一行里，点开即可看到完整上下文；数组标题上的 `本轮 n` / `历史 n` 告诉你各有多少条。
 4. 若这条回复所在的 Turn 调用了很多次，用标签页或左侧列表切换，看每一次各自发了什么。
 5. `tool_calls` 里的行是工具调用卡片：徽标给出成败与往返耗时，悬停看原始参数，点徽标展开参数与结果正文。
-6. 「复制」拿走当前这份请求，「复制全部调用」拿走整轮所有请求组成的数组。
+6. 「复制」拿走当前这一屏的内容（请求侧是请求，响应侧是重建出来的响应体），「复制全部调用」拿走整轮所有请求组成的数组。
+7. 想知道模型回了什么，点头部 `请求 | 响应` 切到响应侧：`结束原因` 说明它为什么停下，`重试` 列出这一步失败过的尝试，下面是重建后的 chat-completion JSON。
 
 ## 数据来源
 
@@ -85,6 +87,9 @@ git clone https://github.com/shengpj/dsh-payload.git
 | 本轮 / 历史的切分 | 这条回复所属 Turn 的 `turn/start.seq`：seq 不小于它的消息算本轮（用户消息、本轮注入的上下文、这一轮已产生的 assistant 与工具结果），更早的是历史 |
 | token 用量 | 该 step 的 `assistant/message.data.usage`（provider 上报的真实值，不是估算） |
 | 工具调用的状态/耗时/结果 | `tool/call`（`callId`、`name`、`arguments` 原串、`time`）与 `tool/result`（`callId`、`isError`、正文）按 `callId` 配对；耗时 = 两条记录的 `time` 差，结果字节 = 正文的 UTF-8 长度 |
+| 回复正文 / 推理字符 / 结束原因 | 该 step 的 `assistant/message.data.message.content`（`text`、`reasoning`、`tool-call` 三类分块）与 `.data.stream` 末尾 `chunk.type === 'finish'` 的 `chunk.reason`（`kind` + `failure{message, code, status}`） |
+| 失败重试 | 同一步的 `assistant/attempt`：每次失败尝试一条，同样带自己的 `stream`/`finish`；成功那次以 `assistant/message` 出现，所以不计入重试列表 |
+| 首字节 / 总时长 / 分块数 | `step/start.time` 到响应流第一个分块的 `time`（含请求准备，不只是网络往返）；最后一个分块减第一个为总时长；分批到达的分块用 `time0 + dt[]` 还原每个分块的时刻 |
 
 `request/header` 只在调用配置发生变化时才写一条（`reason` 为 `initial` / `change` / `resume` / `series`），不是每次调用都有——所以分组锚点用 `step/start`，配置从不超过该 step 的最近一条 header 继承。
 
@@ -129,7 +134,7 @@ index.js                     Host 半边（空 apply，只为让 bundle 有个 h
 client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
 cordis.patch.yml             装进 profile 时插入的条目
 tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射与本轮/历史切分
-tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 13 个场景（含错误边界、工具卡片）
+tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 14 个场景（含错误边界、工具卡片、响应侧）
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -142,11 +147,13 @@ market/index.json                  插件市场索引（format 1）
 ```bash
 node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
 node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
-node tools/render-smoke.cjs                       # 渲染：13 个场景
+node tools/render-smoke.cjs                       # 渲染：14 个场景
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 
-`verify-against-session.cjs` 除了对账每个 Turn 的调用次数与 token 总量，还会检查四组不变量：本轮/历史切分（`historyEnd` 落在 `0..messages` 之间、随 step 前进只增不减、且不少于上一轮最后一次调用已携带的消息数）、来源分类（每条消息恰好归类一次，且各类之和等于 `messages.length`）、相邻调用 diff（首调用没有 diff；其余调用满足 `prefix + added = messages`，`removed > 0` 时必须同时标记为改写），以及 step 记录区间（每个调用都满足 `startSeq ≤ endSeq`，且各 step 的区间互不重叠——时间线就是靠这个区间算出每步的 token），和跨链（`meta.messageLinks` 与 `request.messages` 等长，assistant 消息映射到 `14:assistant-step<turn>:<step>`、工具结果映射到 `9:tool-call<callId>`、其余映射到 `13:input-message<id>`，与对话端 `data-chat-node-key` 的公式一致）。逐 Turn 重建再释放，避免把整份会话的所有 prompt 同时留在内存里。
+`verify-against-session.cjs` 除了对账每个 Turn 的调用次数与 token 总量，还会检查四组不变量：本轮/历史切分（`historyEnd` 落在 `0..messages` 之间、随 step 前进只增不减、且不少于上一轮最后一次调用已携带的消息数）、来源分类（每条消息恰好归类一次，且各类之和等于 `messages.length`）、相邻调用 diff（首调用没有 diff；其余调用满足 `prefix + added = messages`，`removed > 0` 时必须同时标记为改写），以及 step 记录区间（每个调用都满足 `startSeq ≤ endSeq`，且各 step 的区间互不重叠——时间线就是靠这个区间算出每步的 token），和跨链（`meta.messageLinks` 与 `request.messages` 等长，assistant 消息映射到 `14:assistant-step<turn>:<step>`、工具结果映射到 `9:tool-call<callId>`、其余映射到 `13:input-message<id>`，与对话端 `data-chat-node-key` 的公式一致），以及响应侧。逐 Turn 重建再释放，避免把整份会话的所有 prompt 同时留在内存里。
+
+响应侧的不变式：每个调用的结束原因、回复正文、`tool_calls` 的 id 序列、usage 合计和重试次数都要与日志逐条对上；`assistant/attempt` 里最后一条带 finish 的尝试决定「没有回复的步骤」为什么失败；回复自己的 `tool_calls` 必须解析出本轮日志里配对的结果（不能显示成「未返回」）；没有任何回复的步骤必须明确写成「没有回复记录」，而不是造一份空 body。
 
 数据管线的核心是五步：定位消息所属 Turn → 翻完窗口 → 逐个 `step/start` 切分 → 每个切点折叠出 `messages` 并继承最近一条 `request/header` → 按 `meta.step` 选中目标调用。其中第三步到第四步之间是**一次**折叠：`FoldState` 只把新增事件折进去，每个切点只记下当轮数组的长度和快照，所以第 k 步的 `messages` 是第 k−1 步的前缀，不会出现拿着全量事件重扫 100 多次的平方复杂度；来源分类统计也是同一套前缀累加。踩过的坑（slot 组件里不能用注入式 hook、`request/header` 稀疏、空 `content: []` 是增量标记、`listTokens` 不是全量 token 表等）都记在 [docs/notes.md](docs/notes.md)。
 

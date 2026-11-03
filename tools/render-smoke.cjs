@@ -230,6 +230,7 @@ expect(!!internals, 'test hook not exported');
 expect(typeof internals.DialogBody === 'function', 'DialogBody not exposed');
 
 const DialogBody = internals.DialogBody;
+const ResponsePanel = internals.ResponsePanel;
 
 /* a) single call: no tab strip, no step list, chips + JSON visible */
 const one = walk(DialogBody({ payload: payload([makeCall(1, 1, 7, 14056)]) }));
@@ -608,11 +609,87 @@ bareToolCall.request.messages.push({
 const bareWalk = walkAll(DialogBody({ payload: payload([bareToolCall]) }));
 expect(/read/.test(bareWalk.text.join(' ')), 'tool_calls without a detail map broke the JSON pane');
 
+/* n) response view: the reply side is its own screen, so it is checked through
+      its own component — the retry list (a failure is only legible if the attempt
+      that died is shown), the rebuilt OpenAI body, and the switch that reaches it.
+      A call with no reply must say so rather than render an empty tree. */
+const replyMessage = {
+  id: 'msg_reply',
+  role: 'assistant',
+  content: [
+    { type: 'text', text: 'Let me read the file.' },
+    { type: 'tool-call', id: 'call_ok', name: 'read', arguments: '{"file_path":"a.js"}' },
+  ],
+  source: { kind: 'model', provider: 'vc-ds', model: 'deepseek-v4.1-flash' },
+};
+const replyUsage = { input: 12, cache: 2048, output: 8, total: 2068, hitRate: 0.99 };
+const replyFinish = { kind: 'tool-calls', failure: null };
+const replyResponse = {
+  finish: replyFinish,
+  attempts: [
+    {
+      seq: 11,
+      finish: { kind: 'error', failure: { message: '502 upstream', code: 'SERVER', status: null } },
+    },
+  ],
+  timing: { ttfbMs: 1240, spanMs: 830, records: 6, deltas: 5 },
+  stats: internals.contentStatsOf(replyMessage),
+  body: internals.responseBodyOf(replyMessage, replyUsage, 'deepseek-v4.1-flash', replyFinish),
+};
+const replyDetails = {
+  call_ok: {
+    callId: 'call_ok', name: 'read', argumentsText: '{"file_path":"a.js"}', argumentsJson: { file_path: 'a.js' },
+    argumentsOk: true, summary: 'file_path=a.js', argumentsBytes: 24, status: 'ok', durationMs: 21, seq: 1, time: 0,
+    result: { text: 'line one', bytes: 8, isError: false, seq: 2 },
+  },
+};
+const replyWalk = walkAll(
+  ResponsePanel({ response: replyResponse, mode: 'all', toolDetailsByCallId: replyDetails }),
+);
+const replyText = replyWalk.text.join(' ');
+expect(/尝试\s*1|attempt\s*1/i.test(replyText), 'retry row missing: ' + replyText.slice(0, 200));
+expect(/SERVER/.test(replyText), 'retry row lost the failure code');
+expect(/502 upstream/.test(replyText), 'retry row lost the failure message');
+expect(replyText.includes('Let me read the file.'), 'rebuilt body lost the reply text');
+expect(
+  replyWalk.classes.some((c) => c.split(/\s+/).includes('dsh-pl-toolbadge')),
+  'the reply’s own tool_calls did not resolve to a tool badge',
+);
+expect(
+  JSON.stringify(replyResponse.body).includes('"finish_reason":"tool_calls"'),
+  'body finish_reason does not follow the finish kind',
+);
+
+const noReplyWalk = walkAll(ResponsePanel({ response: { ...replyResponse, body: null, stats: null } }));
+expect(
+  /没有这次调用的回复记录|No reply recorded/i.test(noReplyWalk.text.join(' ')),
+  'a reply-less call did not say so',
+);
+expect(
+  /没有这次调用的回复记录|No reply recorded/i.test(
+    walkAll(ResponsePanel({ response: null })).text.join(' '),
+  ),
+  'a missing response object did not say so',
+);
+
+/* The switch itself: two halves, exactly one active, reached from the dialog. */
+const switchWalk = walk(DialogBody({ payload: payload([makeCall(1, 1, 3, 100)]) }));
+const segClasses = switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg'));
+expect(segClasses.length === 2, 'expected a two-way request/response switch, got ' + segClasses.length);
+expect(
+  switchWalk.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-seg-on')).length === 1,
+  'exactly one half of the switch should be active',
+);
+expect(
+  /请求|Request/.test(switchWalk.text.join(' ')) && /响应|Response/.test(switchWalk.text.join(' ')),
+  'switch halves are not labelled',
+);
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response');
 if (problems.length === 0) {
-  console.log('=== render smoke ok: 13 scenarios, no problem(s) ===');
+  console.log('=== render smoke ok: 14 scenarios, no problem(s) ===');
 } else {
   console.log('=== render smoke problems: ' + problems.length + ' ===');
   for (const problem of problems) console.log('  - ' + problem);

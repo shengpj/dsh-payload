@@ -30,13 +30,13 @@ window.__ModuleLoader__.load({
     const ZH = typeof navigator !== 'undefined' && /^zh/i.test(navigator.language || '');
     const TEXT = ZH
       ? {
-          show: '查看请求 JSON',
+          show: '查看请求 / 响应',
           copy: '复制',
           copied: '已复制',
           loading: '正在读取本轮请求…',
           empty: '这一轮没有记录到模型调用。',
           error: '读取失败：',
-          title: '本轮发送给模型的完整请求',
+          title: '本轮这次调用的请求与回复',
           messages: '条消息',
           tools: '个工具',
           copyAll: '复制全部调用',
@@ -126,15 +126,42 @@ window.__ModuleLoader__.load({
           stepWord: 'step',
           tokens: 'token',
           noUsage: '无用量',
+          /* 响应侧：这一屏回答"模型回了什么"，与请求侧一一对应。 */
+          viewRequest: '请求',
+          viewResponse: '响应',
+          viewTitle: '切换查看这次调用发出去的请求体，或它收到的回复',
+          responseNone: '日志里没有这次调用的回复记录（可能被中断或仍在流式返回）。',
+          finishLabel: '结束原因',
+          finishStop: '正常结束',
+          finishToolCalls: '要求调用工具',
+          finishLength: '达到输出上限',
+          finishAborted: '被中断',
+          finishError: '失败',
+          finishUnknown: '未知',
+          finishTitle: '模型为什么停下：日志里 finish 分块记录的 reason。',
+          responseFirst: '首字节',
+          responseFirstTitle:
+            '从这一步开始，到收到第一个响应分块的耗时。含准备请求的时间，不等于网络往返。',
+          responseSpan: '总时长',
+          responseSpanTitle: '第一个响应分块到最后一个响应分块之间的耗时。',
+          responseOutChars: '输出字符',
+          responseOutCharsTitle: '回复正文的字符数（不含工具参数与推理）。',
+          responseReasoning: '推理字符',
+          responseReasoningTitle: '推理内容（reasoning）的字符数。',
+          responseBytesLabel: '响应体',
+          attemptsLabel: '重试',
+          attemptsTitle: '同一步里失败的尝试；每一次都以一个 finish 分块结束，成功的那次不算在内。',
+          attemptNo: '尝试 ',
+          responseShapeTitle: '这一屏按 OpenAI chat-completion 的形态重建了响应，方便直接复制。',
         }
       : {
-          show: 'Request JSON',
+          show: 'Request / response',
           copy: 'Copy',
           copied: 'Copied',
           loading: 'Reading this turn’s request…',
           empty: 'No model call recorded for this turn.',
           error: 'Read failed: ',
-          title: 'Full request sent to the model for this turn',
+          title: 'Request and reply for this call',
           messages: 'messages',
           tools: 'tools',
           copyAll: 'Copy all calls',
@@ -222,6 +249,33 @@ window.__ModuleLoader__.load({
           stepWord: 'step',
           tokens: 'tokens',
           noUsage: 'no usage',
+          viewRequest: 'Request',
+          viewResponse: 'Response',
+          viewTitle: 'Switch between the request that was sent and the reply it received',
+          responseNone: 'No reply recorded for this call in the log (interrupted, or still streaming).',
+          finishLabel: 'finish',
+          finishStop: 'stopped',
+          finishToolCalls: 'tool calls',
+          finishLength: 'output limit',
+          finishAborted: 'aborted',
+          finishError: 'failed',
+          finishUnknown: 'unknown',
+          finishTitle: 'Why the model stopped: the finish chunk’s reason in the log.',
+          responseFirst: 'first byte',
+          responseFirstTitle:
+            'From the start of this step to the first response chunk. Includes request preparation, so it is not a network round-trip.',
+          responseSpan: 'stream time',
+          responseSpanTitle: 'Between the first and the last response chunk.',
+          responseOutChars: 'output chars',
+          responseOutCharsTitle: 'Characters of reply text (tool arguments and reasoning excluded).',
+          responseReasoning: 'reasoning chars',
+          responseReasoningTitle: 'Characters of reasoning content.',
+          responseBytesLabel: 'response',
+          attemptsLabel: 'retries',
+          attemptsTitle:
+            'Failed attempts in this step; each ends with a finish chunk. The successful one is not counted.',
+          attemptNo: 'attempt ',
+          responseShapeTitle: 'This view rebuilds the reply in OpenAI chat-completion shape so it can be copied.',
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
@@ -360,6 +414,68 @@ window.__ModuleLoader__.load({
         background: 'transparent',
       },
       chipWarnValue: { color: 'var(--dsw-alias-warn, #9a6700)' },
+      chipError: {
+        border: '1px solid var(--dsw-alias-danger, rgba(207,34,46,0.75))',
+        background: 'transparent',
+      },
+      chipErrorValue: { color: 'var(--dsw-alias-danger, #b42318)' },
+
+      /* ---- request / response switch: two states, one segmented control ---- */
+      viewSwitch: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '2px',
+        padding: '2px',
+        borderRadius: '8px',
+        flex: '0 0 auto',
+        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.08))',
+      },
+      segBtn: {
+        font: 'inherit',
+        fontSize: '12px',
+        lineHeight: '20px',
+        fontWeight: 600,
+        height: '24px',
+        padding: '0 10px',
+        border: 'none',
+        borderRadius: '6px',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+        cursor: 'pointer',
+        boxSizing: 'border-box',
+      },
+      segBtnActive: {
+        background: 'var(--dsw-alias-bg-overlay, #ffffff)',
+        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+        boxShadow: 'inset 0 0 0 1px var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
+      },
+
+      /* ---- response side: the retry list sits above the rebuilt body ---- */
+      attemptList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+        marginBottom: '8px',
+        padding: '8px 10px',
+        borderRadius: '8px',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
+        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
+      },
+      attemptRow: {
+        display: 'flex',
+        alignItems: 'baseline',
+        flexWrap: 'wrap',
+        gap: '8px',
+        fontSize: '12px',
+        lineHeight: '18px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      attemptText: {
+        fontFamily: FONT_MONO,
+        fontSize: '11.5px',
+        color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+        wordBreak: 'break-word',
+      },
 
       /* ---- diff: the appended tail, one line per message ---- */
       diffBox: {
@@ -1400,6 +1516,10 @@ window.__ModuleLoader__.load({
           steps.push({
             step: typeof data.step === 'number' ? data.step : steps.length + 1,
             seq: seq,
+            /* When the step opened. The reply's first chunk minus this is the only
+               honest "time to first byte" the log allows: it includes prompt
+               assembly, so the panel labels it accordingly. */
+            time: at,
           });
           continue;
         }
@@ -1409,19 +1529,44 @@ window.__ModuleLoader__.load({
         const key = String(data.step);
 
         if (type === 'assistant/message' || type === 'assistant/attempt') {
-          const entry = responseByStep[key] || (responseByStep[key] = { cutSeq: undefined, source: null, usage: null, endSeq: undefined });
+          const entry =
+            responseByStep[key] ||
+            (responseByStep[key] = {
+              cutSeq: undefined,
+              source: null,
+              usage: null,
+              endSeq: undefined,
+              /* The reply itself, plus everything needed to describe *what came
+                 back*: the raw stream (timing + finish), and every failed attempt
+                 that preceded it. */
+              message: null,
+              stream: null,
+              finish: null,
+              attempts: [],
+            });
           if (entry.cutSeq === undefined) entry.cutSeq = seq;
           /* The response is not the only thing a step writes: tool calls and tool
              results follow it before the next step starts. The timeline needs the
              whole span, so it closes at the last record carrying this step. */
           entry.endSeq = seq;
-          if (type === 'assistant/message' && data.usage && typeof data.usage === 'object') {
-            entry.usage = data.usage;
-          }
-          if (!entry.source && type === 'assistant/message') {
-            const message = data.message;
+          if (type === 'assistant/message') {
+            entry.message = data.message && typeof data.message === 'object' ? data.message : null;
+            entry.stream = Array.isArray(data.stream) ? data.stream : null;
+            entry.finish = finishOfStream(entry.stream);
+            if (data.usage && typeof data.usage === 'object') {
+              entry.usage = data.usage;
+            }
+            const message = entry.message;
             const source = message && typeof message.source === 'object' ? message.source : null;
-            if (source) entry.source = source;
+            if (!entry.source && source) entry.source = source;
+          } else {
+            /* A failed attempt leaves no message — only its finish chunk says what
+               went wrong, and keeping every attempt is what makes a retry legible. */
+            entry.attempts.push({
+              seq: seq,
+              time: at,
+              finish: finishOfStream(Array.isArray(data.stream) ? data.stream : null),
+            });
           }
         } else if (type === 'tool/call' || type === 'tool/result') {
           const entry = toolsByStep[key] || (toolsByStep[key] = { calls: 0, results: 0, names: [], details: [] });
@@ -1564,6 +1709,44 @@ window.__ModuleLoader__.load({
         const prev = calls.length ? calls[calls.length - 1] : null;
         const diff = prev ? diffRequests(prev.request, request) : null;
 
+        /* The other half of the exchange: what came back. Everything here is
+           derived from the step's own response records, so the panel can show a
+           reply without re-reading the log. */
+        const callUsage = response && response.usage ? normalizeUsage(response.usage) : null;
+        const attemptList = response && Array.isArray(response.attempts) ? response.attempts : [];
+        const replyStreamTiming = response ? timingOfStream(response.stream) : null;
+        const replyFinish =
+          response && response.message
+            ? response.finish
+            : /* A step can die without ever writing a message: attempts only. The
+                 last attempt is usually the informative one, but an attempt whose
+                 stream ended without a finish chunk would hide the real reason, so
+                 take the last attempt that actually reported one. */
+              lastFinishOf(attemptList);
+        const reply = response
+          ? {
+              finish: replyFinish,
+              /* Failed attempts only: the one that produced a reply is the reply. */
+              attempts: attemptList.map(function (item) {
+                return { seq: item.seq, finish: item.finish };
+              }),
+              timing: replyStreamTiming
+                ? {
+                    /* Measured from the step's opening record, so it includes
+                       prompt assembly — longer than a network round-trip, and
+                       labelled as such in the title. */
+                    ttfbMs:
+                      typeof stepInfo.time === 'number' ? replyStreamTiming.first - stepInfo.time : null,
+                    spanMs: replyStreamTiming.spanMs,
+                    records: replyStreamTiming.records,
+                    deltas: replyStreamTiming.deltas,
+                  }
+                : null,
+              stats: response.message ? contentStatsOf(response.message) : null,
+              body: response.message ? responseBodyOf(response.message, callUsage, model, replyFinish) : null,
+            }
+          : null;
+
         calls.push({
           index: i + 1,
           request: request,
@@ -1615,13 +1798,214 @@ window.__ModuleLoader__.load({
             freshSources: accFreshSources(sourceFresh, built.track, built.historyEnd, turnStartSeq),
             freshBytes: freshBytes(built.track, turnStartSeq, built.historyEnd),
             tools: tools.length,
-            usage: response && response.usage ? normalizeUsage(response.usage) : null,
+            usage: callUsage,
             diff: diff,
+            /* The reply side of this call. Kept on `meta` so `request` stays
+               byte-for-byte what was sent. */
+            response: reply,
           },
         });
       }
 
+      /* Steps are laid out by their request cut, so the fold stops at the last
+         step's cut — but that step's own tool calls and their results come after
+         it. Consuming the rest of the Turn completes the shared detail index,
+         which is what lets the 响应 tab show a reply's `tool_calls` with its
+         result instead of a `missing` badge. Cuts never rewind, so this is the
+         same pass continuing, not a second scan. */
+      const tailLimit = turnEndSeq >= 0 ? turnEndSeq : Number.MAX_SAFE_INTEGER;
+      while (cursor < events.length && seqOf(events[cursor]) <= tailLimit) {
+        fold.consume(events[cursor]);
+        cursor += 1;
+      }
+
       return { turn: turnNumber, calls: calls };
+    }
+
+    /**
+     * The `finish` chunk of one response stream.
+     *
+     * The log stores a stream as an array of records: single `chunk` records and
+     * batched `<kind>-chunks` records that carry `dt[]` deltas. Only the single
+     * chunks matter here — exactly one of them is the finish, and it is the only
+     * place that says *why* the model stopped, including the failure that ended
+     * an attempt before a reply was ever produced.
+     */
+    function finishOfStream(stream) {
+      if (!Array.isArray(stream)) return null;
+      for (let i = stream.length - 1; i >= 0; i -= 1) {
+        const record = stream[i];
+        if (!record || record.type !== 'chunk') continue;
+        const chunk = record.chunk;
+        if (!chunk || chunk.type !== 'finish') continue;
+        const reason = chunk.reason && typeof chunk.reason === 'object' ? chunk.reason : {};
+        const failure = reason.failure && typeof reason.failure === 'object' ? reason.failure : null;
+        return {
+          kind: typeof reason.kind === 'string' ? reason.kind : 'unknown',
+          failure: failure
+            ? {
+                message: typeof failure.message === 'string' ? failure.message : '',
+                code: typeof failure.code === 'string' ? failure.code : '',
+                status: typeof failure.status === 'number' ? failure.status : null,
+              }
+            : null,
+        };
+      }
+      return null;
+    }
+
+    /**
+     * The reason a reply-less step stopped.
+     *
+     * A step with no message is a step that failed; its attempts are the only
+     * evidence. Walk backwards for the last attempt that reported a finish, so a
+     * trailing attempt whose stream merely went quiet cannot mask the earlier
+     * failure that actually killed the step.
+     */
+    function lastFinishOf(attempts) {
+      if (!Array.isArray(attempts)) return null;
+      for (let i = attempts.length - 1; i >= 0; i -= 1) {
+        const attempt = attempts[i];
+        if (attempt && attempt.finish) return attempt.finish;
+      }
+      return null;
+    }
+
+    /**
+     * Wall-clock shape of one response stream.
+     *
+     * Records carry either an absolute `time` (single chunk) or a `time0` plus
+     * `dt[]` deltas (batched chunks), so the first and last moments the server
+     * spoke are both recoverable — and therefore the gap between them. Nothing is
+     * extrapolated: `spanMs` is last − first, and the delta count is reported so
+     * the panel can say how many pieces the reply arrived in.
+     */
+    function timingOfStream(stream) {
+      if (!Array.isArray(stream)) return null;
+      let first = null;
+      let last = null;
+      let batched = 0;
+      let deltas = 0;
+      for (let i = 0; i < stream.length; i += 1) {
+        const record = stream[i];
+        if (!record || typeof record !== 'object') continue;
+        let at = typeof record.time === 'number' ? record.time : null;
+        if (at === null && typeof record.time0 === 'number') {
+          at = record.time0;
+          batched += 1;
+          if (Array.isArray(record.dt)) deltas += record.dt.length;
+        }
+        if (at === null) continue;
+        if (first === null || at < first) first = at;
+        if (last === null || at > last) last = at;
+      }
+      if (first === null) return null;
+      return {
+        first: first,
+        last: last,
+        spanMs: Math.max(0, last - first),
+        records: stream.length,
+        batched: batched,
+        deltas: deltas,
+      };
+    }
+
+    /** A reply's text/reasoning/tool-call blocks, counted. */
+    function contentStatsOf(message) {
+      const blocks = message && Array.isArray(message.content) ? message.content : [];
+      let textChars = 0;
+      let reasoningChars = 0;
+      let toolCalls = 0;
+      for (let i = 0; i < blocks.length; i += 1) {
+        const block = blocks[i];
+        if (!block || typeof block !== 'object') continue;
+        if (block.type === 'text') {
+          if (typeof block.text === 'string') textChars += block.text.length;
+        } else if (block.type === 'reasoning') {
+          if (typeof block.text === 'string') reasoningChars += block.text.length;
+          else if (typeof block.reasoning === 'string') reasoningChars += block.reasoning.length;
+        } else if (block.type === 'tool-call') {
+          toolCalls += 1;
+        }
+      }
+      return { blocks: blocks.length, textChars: textChars, reasoningChars: reasoningChars, toolCalls: toolCalls };
+    }
+
+    /** The reply as the wire form a chat-completion caller would have received. */
+    function responseBodyOf(message, usage, model, finish) {
+      const blocks = message && Array.isArray(message.content) ? message.content : [];
+      let text = '';
+      let reasoning = '';
+      const toolCalls = [];
+      for (let i = 0; i < blocks.length; i += 1) {
+        const block = blocks[i];
+        if (!block || typeof block !== 'object') continue;
+        if (block.type === 'text' && typeof block.text === 'string') {
+          text += block.text;
+        } else if (block.type === 'reasoning') {
+          if (typeof block.text === 'string') reasoning += block.text;
+          else if (typeof block.reasoning === 'string') reasoning += block.reasoning;
+        } else if (block.type === 'tool-call') {
+          toolCalls.push({
+            id: block.id,
+            type: 'function',
+            function: {
+              name: typeof block.name === 'string' ? block.name : '',
+              arguments: typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments),
+            },
+          });
+        }
+      }
+
+      /* The log's vocabulary ("tool-calls", "max-tokens") is not the wire's
+         ("tool_calls", "length"); translate so a copied body is usable as-is. */
+      const finishMap = {
+        stop: 'stop',
+        'tool-calls': 'tool_calls',
+        'max-tokens': 'length',
+        length: 'length',
+        aborted: 'aborted',
+        interrupted: 'aborted',
+      };
+      const finishReason = finish && finish.kind ? finishMap[finish.kind] || finish.kind : null;
+
+      const assistant = { role: 'assistant', content: text === '' ? null : text };
+      if (reasoning !== '') assistant.reasoning_content = reasoning;
+      if (toolCalls.length) assistant.tool_calls = toolCalls;
+
+      const body = {};
+      if (message && message.id !== undefined) body.id = message.id;
+      body.object = 'chat.completion';
+      body.model = model === undefined ? null : model;
+      body.choices = [{ index: 0, message: assistant, finish_reason: finishReason }];
+      if (usage) {
+        body.usage = {
+          prompt_tokens: usage.input + usage.cache,
+          completion_tokens: usage.output,
+          total_tokens: usage.total,
+          prompt_tokens_details: { cached_tokens: usage.cache },
+        };
+      }
+      if (finish && finish.failure) body.error = finish.failure;
+      return body;
+    }
+
+    /** Milliseconds as "1.2s" / "340ms". */
+    function formatMs(ms) {
+      if (typeof ms !== 'number' || !Number.isFinite(ms)) return '—';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+      return (ms / 60000).toFixed(1) + 'min';
+    }
+
+    /** The Chinese label for one `finish.reason.kind`. */
+    function finishLabelOf(kind) {
+      if (kind === 'stop') return TEXT.finishStop;
+      if (kind === 'tool-calls') return TEXT.finishToolCalls;
+      if (kind === 'max-tokens' || kind === 'length') return TEXT.finishLength;
+      if (kind === 'aborted' || kind === 'interrupted') return TEXT.finishAborted;
+      if (kind === 'error') return TEXT.finishError;
+      return TEXT.finishUnknown;
     }
 
     /**
@@ -2068,6 +2452,11 @@ window.__ModuleLoader__.load({
           return DialogBoundary;
         },
         Timeline: Timeline,
+        ResponsePanel: ResponsePanel,
+        finishOfStream: finishOfStream,
+        timingOfStream: timingOfStream,
+        contentStatsOf: contentStatsOf,
+        responseBodyOf: responseBodyOf,
         publishDialog: publishDialog,
       };
     }
@@ -2185,6 +2574,11 @@ window.__ModuleLoader__.load({
       '.dsh-pl-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
       '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
+      /* The request/response switch: the active half is styled inline, so only the
+         inactive half needs a hover affordance. */
+      '.dsh-pl-seg:not(.dsh-pl-seg-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
+      'color:var(--dsw-alias-label-primary,#111827)}',
+      '.dsh-pl-seg:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
       /* The source legend's family chips are navigation pills, not list rows:
          they borrow the hover rules but must not be counted as step-list rows. */
       '.dsh-pl-pill{border-radius:999px}',
@@ -3212,6 +3606,61 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------ dialog body
 
+    /**
+     * The reply side of one call.
+     *
+     * Two things make a reply worth reading separately from its request: *why* it
+     * stopped, and what it actually said. A failed attempt explains why the
+     * successful one exists, so the retry list comes first; the body then goes
+     * through the same JSON tree the request uses, which means a reply's
+     * `tool_calls` inherit the status badges and the result text of the tool
+     * round-trip panel instead of being a wall of argument blobs.
+     */
+    function ResponsePanel(props) {
+      const pal = props.pal || PALETTES.light;
+      const response = props.response;
+      if (!response) return h('div', { style: STYLE.note }, TEXT.responseNone);
+
+      const attempts = Array.isArray(response.attempts) ? response.attempts : [];
+      const rows = [];
+      for (let i = 0; i < attempts.length; i += 1) {
+        const attempt = attempts[i] || {};
+        const failure = attempt.finish && attempt.finish.failure ? attempt.finish.failure : null;
+        const detail = failure
+          ? (failure.code || 'ERROR') +
+            (failure.status === null || failure.status === undefined ? '' : ' ' + failure.status) +
+            (failure.message ? ' · ' + failure.message : '')
+          : finishLabelOf(attempt.finish && attempt.finish.kind);
+        rows.push(
+          h(
+            'div',
+            { key: 'attempt-' + i, style: STYLE.attemptRow },
+            h('span', { key: 'n' }, TEXT.attemptNo + (i + 1)),
+            h('span', { key: 'd', style: STYLE.attemptText }, detail),
+          ),
+        );
+      }
+
+      return h(
+        'div',
+        null,
+        rows.length ? h('div', { key: 'attempts', style: STYLE.attemptList }, rows) : null,
+        response.body
+          ? h(JsonNode, {
+              key: 'body',
+              name: null,
+              value: response.body,
+              depth: 0,
+              mode: props.mode,
+              pal: pal,
+              /* The reply's own `tool_calls` are the calls this step made, so the
+                 same index that serves the request tab resolves their results. */
+              toolDetailsByCallId: props.toolDetailsByCallId,
+            })
+          : h('div', { key: 'none', style: STYLE.note }, TEXT.responseNone),
+      );
+    }
+
     function DialogBody(props) {
       const payload = props.payload;
       const calls = payload.data && Array.isArray(payload.data.calls) ? payload.data.calls : [];
@@ -3220,6 +3669,9 @@ window.__ModuleLoader__.load({
       );
       const [mode, setMode] = React.useState('default');
       const [flash, setFlash] = React.useState('');
+      /* One dialog, two halves of the exchange: the request that was sent, and
+         the reply it got. Request first — it is what the button promised. */
+      const [view, setView] = React.useState('request');
       const bodyRef = React.useRef(null);
 
       /* The payload is far taller than the viewport, so both a draggable scrollbar
@@ -3273,7 +3725,7 @@ window.__ModuleLoader__.load({
           }
           node.scrollTop = 0;
         },
-        [index, mode],
+        [index, mode, view],
       );
 
       const flashDone = (label) => () => {
@@ -3285,7 +3737,9 @@ window.__ModuleLoader__.load({
         if (!call) return;
         let text = '';
         try {
-          text = JSON.stringify(call.request, null, 2);
+          /* Copy what is on screen: the request when the request tab is open, the
+             rebuilt response when the response tab is. */
+          text = JSON.stringify(view === 'response' && meta.response ? meta.response.body : call.request, null, 2);
         } catch (err) {
           text = String(err);
         }
@@ -3297,7 +3751,11 @@ window.__ModuleLoader__.load({
         let text = '';
         try {
           text = JSON.stringify(
-            calls.map((item) => item.request),
+            calls.map((item) => {
+              if (view !== 'response') return item.request;
+              const itemResponse = item.meta && item.meta.response;
+              return itemResponse ? itemResponse.body : null;
+            }),
             null,
             2,
           );
@@ -3307,21 +3765,30 @@ window.__ModuleLoader__.load({
         copyText(text, flashDone('all'));
       };
 
-      const chip = (key, label, value, accent, title) =>
-        h(
+      const chip = (key, label, value, accent, title, variant) => {
+        const shell =
+          variant === 'error'
+            ? Object.assign({}, STYLE.chip, STYLE.chipError)
+            : variant === 'warn'
+              ? Object.assign({}, STYLE.chip, STYLE.chipWarn)
+              : accent
+                ? Object.assign({}, STYLE.chip, STYLE.chipAccent)
+                : STYLE.chip;
+        const valueStyle =
+          variant === 'error'
+            ? Object.assign({}, STYLE.chipValue, STYLE.chipErrorValue)
+            : variant === 'warn'
+              ? Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue)
+              : accent
+                ? Object.assign({}, STYLE.chipValue, STYLE.chipAccentValue)
+                : STYLE.chipValue;
+        return h(
           'span',
-          {
-            key: key,
-            title: title || undefined,
-            style: accent ? Object.assign({}, STYLE.chip, STYLE.chipAccent) : STYLE.chip,
-          },
+          { key: key, title: title || undefined, style: shell },
           label ? h('span', { key: 'l', style: STYLE.chipLabel }, label) : null,
-          h(
-            'span',
-            { key: 'v', style: accent ? Object.assign({}, STYLE.chipValue, STYLE.chipAccentValue) : STYLE.chipValue },
-            value,
-          ),
+          h('span', { key: 'v', style: valueStyle }, value),
         );
+      };
 
       const metaChips = [];
       if (callCount > 1) metaChips.push(chip('call', null, '#' + (index + 1) + ' / ' + callCount));
@@ -3345,8 +3812,7 @@ window.__ModuleLoader__.load({
         metaChips.push(chip('bytes', TEXT.bytesLabel, formatBytes(bodyBytes), false, TEXT.bytesTitle));
 
       const usageChips = [];
-      const currentUsage = meta.usage || null;
-      if (currentUsage) {
+      const currentUsage = meta.usage || null;      if (currentUsage) {
         usageChips.push(chip('in', TEXT.usageInput, formatExact(currentUsage.input), false, TEXT.usageInputTitle));
         usageChips.push(
           chip(
@@ -3368,6 +3834,93 @@ window.__ModuleLoader__.load({
         usageChips.push(chip('none', null, TEXT.usageNone));
       }
 
+      /* The reply side: why it stopped, how fast it streamed, how much it wrote. */
+      const response = meta.response || null;
+      const respChips = [];
+      if (response) {
+        const finishKind = response.finish && response.finish.kind ? response.finish.kind : null;
+        const failure = response.finish && response.finish.failure ? response.finish.failure : null;
+        respChips.push(
+          chip(
+            'finish',
+            TEXT.finishLabel,
+            finishLabelOf(finishKind),
+            !failure && finishKind === 'tool-calls',
+            TEXT.finishTitle,
+            failure ? 'error' : null,
+          ),
+        );
+        if (failure) {
+          respChips.push(
+            chip(
+              'code',
+              null,
+              (failure.code || 'ERROR') + (failure.status === null ? '' : ' ' + failure.status),
+              false,
+              failure.message,
+              'error',
+            ),
+          );
+        }
+        if (response.timing && typeof response.timing.ttfbMs === 'number') {
+          respChips.push(
+            chip('ttfb', TEXT.responseFirst, formatMs(response.timing.ttfbMs), false, TEXT.responseFirstTitle),
+          );
+        }
+        if (response.timing && typeof response.timing.spanMs === 'number') {
+          respChips.push(
+            chip('span', TEXT.responseSpan, formatMs(response.timing.spanMs), false, TEXT.responseSpanTitle),
+          );
+        }
+        if (response.stats) {
+          respChips.push(
+            chip(
+              'chars',
+              null,
+              formatExact(response.stats.textChars) + ' ' + TEXT.responseOutChars,
+              false,
+              TEXT.responseOutCharsTitle,
+            ),
+          );
+          if (response.stats.reasoningChars > 0) {
+            respChips.push(
+              chip(
+                'rchars',
+                null,
+                formatExact(response.stats.reasoningChars) + ' ' + TEXT.responseReasoning,
+                false,
+                TEXT.responseReasoningTitle,
+              ),
+            );
+          }
+        }
+        if (response.attempts.length) {
+          respChips.push(
+            chip(
+              'retry',
+              TEXT.attemptsLabel,
+              String(response.attempts.length),
+              false,
+              TEXT.attemptsTitle,
+              'warn',
+            ),
+          );
+        }
+        let responseBytes = 0;
+        try {
+          responseBytes = response.body ? JSON.stringify(response.body).length : 0;
+        } catch (err) {
+          responseBytes = 0;
+        }
+        if (responseBytes > 0) {
+          respChips.push(
+            chip('rbytes', TEXT.responseBytesLabel, formatBytes(responseBytes), false, TEXT.responseShapeTitle),
+          );
+        }
+      } else {
+        respChips.push(chip('none', null, TEXT.responseNone));
+      }
+
       const header = h(
         'div',
         { key: 'header', style: STYLE.dialogHeader },
@@ -3375,6 +3928,36 @@ window.__ModuleLoader__.load({
           'div',
           { key: 'row-top', style: STYLE.headerRow },
           h('span', { key: 'title', style: STYLE.dialogTitle }, payload.title),
+          h(
+            'div',
+            { key: 'views', style: STYLE.viewSwitch, title: TEXT.viewTitle, role: 'tablist' },
+            h(
+              'button',
+              {
+                key: 'req',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': view === 'request' ? 'true' : 'false',
+                className: view === 'request' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
+                onClick: () => setView('request'),
+                style: Object.assign({}, STYLE.segBtn, view === 'request' ? STYLE.segBtnActive : null),
+              },
+              TEXT.viewRequest,
+            ),
+            h(
+              'button',
+              {
+                key: 'res',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': view === 'response' ? 'true' : 'false',
+                className: view === 'response' ? 'dsh-pl-seg dsh-pl-seg-on' : 'dsh-pl-seg',
+                onClick: () => setView('response'),
+                style: Object.assign({}, STYLE.segBtn, view === 'response' ? STYLE.segBtnActive : null),
+              },
+              TEXT.viewResponse,
+            ),
+          ),
           h(
             'div',
             { key: 'actions', style: STYLE.headerActions },
@@ -3454,9 +4037,11 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h('div', { key: 'row-meta', style: STYLE.chips }, metaChips),
+        h('div', { key: 'row-meta', style: STYLE.chips }, view === 'response' ? respChips : metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
-        call ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
+        /* Diff and source breakdown describe the REQUEST; the reply has no
+           equivalent, so they fold away on the response tab instead of lying. */
+        call && view === 'request' ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
         callCount > 1
           ? h(Timeline, {
               key: 'row-timeline',
@@ -3466,7 +4051,7 @@ window.__ModuleLoader__.load({
               pal: pal,
             })
           : null,
-        call
+        call && view === 'request'
           ? h(SourcePanel, {
               key: 'row-sources',
               sources: meta.sources,
@@ -3622,7 +4207,15 @@ window.__ModuleLoader__.load({
       const body = h(
         'div',
         { key: 'body', ref: bodyRef, className: 'dsh-pl-scroll', style: STYLE.dialogBody, title: TEXT.railTitle },
-        call
+        call && view === 'response'
+          ? h(ResponsePanel, {
+              key: 'resp:' + mode + ':' + index,
+              response: response,
+              mode: mode,
+              pal: pal,
+              toolDetailsByCallId: meta.toolDetailsByCallId,
+            })
+          : call
           ? h(JsonNode, {
               key: mode + ':' + index,
               name: null,
@@ -3645,9 +4238,10 @@ window.__ModuleLoader__.load({
           : h('div', { style: STYLE.note }, TEXT.empty),
       );
 
-      /* Only worth saying when the log carries far more than the model reads. */
+      /* Only worth saying when the log carries far more than the model reads — and
+         only on the request tab, which is what the note is about. */
       const foot =
-        call && typeof meta.messages === 'number' && meta.messages > 200
+        call && view === 'request' && typeof meta.messages === 'number' && meta.messages > 200
           ? h('div', { key: 'foot', style: STYLE.dialogFoot }, TEXT.compressNote)
           : null;
 

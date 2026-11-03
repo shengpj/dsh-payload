@@ -96,3 +96,11 @@
 - 「全部展开」会把历史组一起展开（`JsonHistoryGroup` 的初始态是 `mode === 'all'`）；`messages` 标题上另有 `本轮 n` / `历史 n` 两个计数，弹框 meta 行和 step 列表也带上本轮条数。
 - 数值验证：`verify-against-session.cjs` 断言 `historyEnd` 落在 `0..messages`、随 step 只增不减、且不小于上一轮最后一次调用已携带的消息数；当前真实会话 30 轮全部成立（如第 24 轮最后一次：1224 条消息里 1076 条历史、148 条本轮）。
 
+
+## 响应侧（请求 / 响应两屏）
+
+- 数据来源全部是这一步自己的记录：`assistant/message` 给正文（`content` 分块：`text` / `reasoning` / `tool-call`）、`usage` 和 `source`（真实 model/provider）；它 `.data.stream` 末尾的 `finish` 分块给出结束原因（`kind` + `failure{message, code, status}`）；`assistant/attempt` 是这一步失败过的每一次尝试，各自也带一份 `stream`/`finish`；时间从分块的 `time`（或 `time0 + dt[]`）里还原，`step/start.time` 到第一个分块是「首字节」，首尾之差是「总时长」。
+- 重建的响应体用 OpenAI chat-completion 形态（`choices[0].message` + `finish_reason` + `usage`），因为它才是「复制出去就能直接喂给别的工具」的形状；`finish_reason` 由 finish kind 映射（`tool-calls` → `tool_calls`、`max-tokens` → `length`、`aborted` → `aborted`）。
+- 两个坑：**没有回复的步骤**在日志里只有 `assistant/attempt`，没有 `assistant/message`——这时不能伪造 body，要把失败尝试列出来；而一条 step 的最后一次尝试可能只是流断了（`stream` 里没有 finish 分块），所以结束原因要取**最后一条带 finish 的尝试**（`lastFinishOf`），否则真正的 502/AUTH 原因会被静默吞掉。
+- 响应体的 `tool_calls` 复用请求侧的工具卡片：`ResponsePanel` 把 `meta.toolDetailsByCallId` 继续传给 `JsonNode`，所以回复自己发起的调用能直接看到后来的成败与耗时。
+- 验证：`verify-against-session.cjs` 的 `responses` 段落逐调用对账结束原因、正文长度、`tool_calls` id 序列、usage 合计、重试次数，并断言回复自己的调用不能落到「未返回」。
