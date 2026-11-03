@@ -280,20 +280,25 @@ for (const start of flat.filter((event) => event.type === 'turn/start')) {
       diffProblems.push('Turn ' + turn + ' #' + item.index + ': prevMessages ' + diff.prevMessages + ' != ' + prev);
     if (!(diff.prefix >= 0 && diff.prefix <= Math.min(prev, item.meta.messages)))
       diffProblems.push('Turn ' + turn + ' #' + item.index + ': prefix ' + diff.prefix + ' out of range');
-    if (diff.prefix + diff.added.length !== item.meta.messages)
+    if (diff.prefix + diff.added !== item.meta.messages)
       diffProblems.push(
-        'Turn ' + turn + ' #' + item.index + ': prefix+added ' + (diff.prefix + diff.added.length) + ' != messages ' + item.meta.messages,
+        'Turn ' + turn + ' #' + item.index + ': prefix+added ' + (diff.prefix + diff.added) + ' != messages ' + item.meta.messages,
       );
     if (diff.rewritten) rewrittenCalls += 1;
     /* Inside one Turn the request only grows at the tail unless something was
        compacted, so a rewrite must be reported as such, not as appended. */
     if (!diff.rewritten && diff.removed > 0)
       diffProblems.push('Turn ' + turn + ' #' + item.index + ': removed ' + diff.removed + ' without a rewrite');
-    for (const entry of diff.added) {
-      const message = item.request.messages[entry.index];
-      if (!message) diffProblems.push('Turn ' + turn + ' #' + item.index + ': added index ' + entry.index + ' out of range');
-      else if (message.role !== entry.role)
-        diffProblems.push('Turn ' + turn + ' #' + item.index + ': added role ' + entry.role + ' != ' + message.role);
+    /* The marks are drawn at `prefix`, so the last message before it must be the
+       one both requests share — an off-by-one here would band the wrong row. */
+    if (diff.prefix > 0 && prev > 0) {
+      const boundary = item.request.messages[diff.prefix - 1];
+      if (!boundary) diffProblems.push('Turn ' + turn + ' #' + item.index + ': boundary message missing');
+    }
+    if (diff.added > 0) {
+      const firstNew = item.request.messages[diff.prefix];
+      if (!firstNew) diffProblems.push('Turn ' + turn + ' #' + item.index + ': first new message missing');
+      else if (!firstNew.role) diffProblems.push('Turn ' + turn + ' #' + item.index + ': first new message has no role');
     }
   }
   /* One Turn's rebuilt requests already hold the whole conversation; release

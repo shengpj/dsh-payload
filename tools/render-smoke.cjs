@@ -159,6 +159,9 @@ function render(node, sink) {
   if (node.type === 'button' && node.props && node.props['aria-expanded'] !== undefined) {
     sink.toggles.push(String(node.props['aria-expanded']));
   }
+  /* Inline styles carry the "new since the previous call" marks (a dashed rail
+     on each fresh message), so keep them for assertions. */
+  if (node.props && node.props.style && typeof node.props.style === 'object') sink.styles.push(node.props.style);
   sink.tags.push(String(node.type));
   const siblings = node.props.children;
   const seen = new Set();
@@ -173,7 +176,7 @@ function render(node, sink) {
 }
 
 function walk(element) {
-  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [], buttons: [] };
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [], buttons: [], styles: [] };
   render(element, sink);
   return sink;
 }
@@ -265,11 +268,11 @@ function makeCall(index, step, messageCount, tokens, sources) {
         index === 1
           ? null
           : {
+              /* Counts only now: the "what is new" marks are drawn inside the
+                 `messages` array, so the diff object no longer ships the
+                 messages themselves (they already live in request.messages). */
               prefix: messageCount - 2,
-              added: [
-                { index: messageCount - 2, role: 'assistant', head: 'I will read it.', message: { role: 'assistant', content: [{ type: 'text', text: 'I will read it.' }] } },
-                { index: messageCount - 1, role: 'tool', head: 'file contents…', message: { role: 'tool', content: 'file contents…', tool_call_id: 'call_1' } },
-              ],
+              added: 2,
               removed: 0,
               rewritten: false,
               changed: [],
@@ -279,14 +282,26 @@ function makeCall(index, step, messageCount, tokens, sources) {
     request: {
       model: 'deepseek-v4.1-flash',
       provider: 'vc-ds',
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: 'step ' + step + ' question' },
-        { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', name: 'read', arguments: '{"a":1}' }] },
-      ],
+      messages: buildMessages(messageCount, step),
       tools: [{ name: 'read', description: 'read a file', parameters: { type: 'object' } }],
     },
   };
+}
+
+/* `messageCount` messages whose last two are what the NEXT call appends: an
+   assistant line and its tool result — the shape the diff marks act on. */
+function buildMessages(messageCount, step) {
+  const list = [
+    { role: 'system', content: 'You are a helpful assistant.' },
+    { role: 'user', content: 'step ' + step + ' question' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', name: 'read', arguments: '{"a":1}' }] },
+  ];
+  while (list.length < messageCount - 2) {
+    list.push({ role: 'tool', content: 'filler ' + list.length, tool_call_id: 'call_1' });
+  }
+  if (messageCount >= 1) list.push({ role: 'assistant', content: [{ type: 'text', text: 'I will read it.' }] });
+  if (messageCount >= 2) list.push({ role: 'tool', content: 'file contents…', tool_call_id: 'call_1' });
+  return list.slice(0, Math.max(0, messageCount));
 }
 
 function payload(calls, selected) {
@@ -449,27 +464,45 @@ expect(/本轮新增|new this turn/.test(sourcedText), 'fresh-this-turn marker m
 expect(sourced.barSegs === 4, 'expected 4 bar segments (non-empty families), got ' + sourced.barSegs);
 expect(!one.text.join(' ').match(/你的输入|your prompt/), 'source panel rendered without a summary');
 
-/* j) diff: the first call says there is nothing to compare, later calls list
-      what got appended, and a rewritten payload is called out as such. */
+/* j) "what did this call add": marked inside the messages array itself — the
+      first call of a Turn marks nothing, later calls band the appended messages
+      and draw the boundary rule, and a rewrite is called out as such. */
 const firstCall = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100)]) }));
+const firstText = firstCall.text.join(' ');
+expect(!/新增|new in this call/.test(firstText), 'first call should mark nothing: nothing to compare against');
+expect(!firstText.includes('上一次调用已有'), 'first call drew a diff boundary');
 expect(
-  /本轮第一次调用|first call of this Turn/.test(firstCall.text.join(' ')),
-  'first call should say there is no previous call to compare',
+  firstCall.styles.filter((style) => String(style.borderLeft).includes('dashed')).length === 0,
+  'first call drew a dashed rail',
 );
 
 const diffed = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200)], 1) }));
 const diffedText = diffed.text.join(' ');
-expect(/新增|added/.test(diffedText), 'added chip missing from the diff panel');
-expect(diffedText.includes('+2'), 'expected +2 added messages, got ' + diffedText.slice(0, 200));
-expect(diffedText.includes('I will read it.'), 'appended assistant head missing');
-expect(diffedText.includes('file contents'), 'appended tool head missing');
-expect(!/消失|gone/.test(diffedText), 'removed chip should not appear when nothing was removed');
+expect(diffedText.includes('+2'), 'fresh pill missing, got ' + diffedText.slice(0, 200));
+expect(/新增|new/.test(diffedText), 'fresh pill has no label');
+expect(
+  diffedText.includes('上一次调用已有') || diffedText.includes('the previous call already had'),
+  'diff boundary rule missing',
+);
+expect(!/消失|gone/.test(diffedText), 'removed pill should not appear when nothing was removed');
+/* Two appended messages → exactly two dashed rails, and they sit on the LAST
+   two messages (index 7 and 8 of a 9-message payload). */
+const rails = diffed.styles.filter((style) => String(style.borderLeft).includes('dashed'));
+expect(rails.length === 2, 'expected 2 dashed rails for 2 appended messages, got ' + rails.length);
+expect(
+  diffed.text.join('').includes('8'),
+  'the appended messages lost their array index',
+);
 
-/* Every row must carry the message itself and a ▸ toggle: the summary can only
-   ever be a summary, so the full JSON has to be one click away. */
-const diffWalk = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200)], 1) }));
-expect(diffWalk.toggles.length === 2, 'expected one expand toggle per added row, got ' + diffWalk.toggles.length);
-expect(diffWalk.toggles.every((flag) => flag === 'false'), 'rows should start collapsed');
+/* A payload that shrank (compaction) must say so instead of silently marking
+   everything as new. */
+const shrunk = makeCall(2, 6, 9, 200);
+shrunk.meta.diff = { prefix: 3, added: 6, removed: 4, rewritten: true, changed: ['maxTokens'], prevMessages: 7 };
+const shrunkText = walk(DialogBody({ payload: payload([makeCall(1, 5, 7, 100), shrunk], 1) })).text.join(' ');
+expect(shrunkText.includes('−4'), 'removed count missing on a compacted payload: ' + shrunkText.slice(0, 240));
+expect(/消失|gone/.test(shrunkText), 'removed pill has no label');
+expect(/原地改写|rewritten/.test(shrunkText), 'rewrite warning missing');
+expect(/参数变化|params changed/.test(shrunkText), 'changed-parameter warning missing');
 
 /* describeMessage must not print the JSON envelope it used to: tool calls are
    summarised as "name · argument", and duplicates are counted once. */

@@ -111,14 +111,12 @@ window.__ModuleLoader__.load({
           sourceKindTool: '工具结果',
           sourceKindJobReport: '后台任务回报',
           sourceKindOther: '未标注来源',
-          diffTitle: '相比上一次调用',
           diffAdded: '新增',
           diffRemoved: '消失',
           diffRewritten: '原地改写',
           diffChanged: '参数变化',
-          diffSame: '与上一次调用完全相同',
-          diffFirst: '本轮第一次调用，没有可比较的上一次',
-          diffPrevTitle: '上一次调用',
+          diffBoundary: '上一次调用已有',
+          diffBoundaryTail: '以下为本次新增',
           diffTools: '个工具',
           timelineTitle: '本轮各步',
           timelineHint: '每段是一步，宽度按该步消耗的 token；点一段切到那次调用',
@@ -234,14 +232,12 @@ window.__ModuleLoader__.load({
           sourceKindTool: 'tool result',
           sourceKindJobReport: 'job report',
           sourceKindOther: 'unlabelled',
-          diffTitle: 'vs previous call',
-          diffAdded: 'added',
+          diffAdded: 'new',
           diffRemoved: 'gone',
           diffRewritten: 'rewritten in place',
           diffChanged: 'params changed',
-          diffSame: 'identical to the previous call',
-          diffFirst: 'first call of this Turn — nothing to compare',
-          diffPrevTitle: 'previous call',
+          diffBoundary: 'the previous call already had',
+          diffBoundaryTail: 'new in this call',
           diffTools: 'tools',
           timelineTitle: 'This Turn’s steps',
           timelineHint: 'One segment per step, width by the tokens it spent; click to switch',
@@ -404,11 +400,6 @@ window.__ModuleLoader__.load({
         background: 'transparent',
       },
       chipAccentValue: { color: 'var(--dsw-alias-brand-primary, #2f6feb)' },
-      chipAdded: {
-        border: '1px solid var(--dsw-alias-success, rgba(46,160,67,0.75))',
-        background: 'transparent',
-      },
-      chipAddedValue: { color: 'var(--dsw-alias-success, #1a7f37)' },
       chipWarn: {
         border: '1px solid var(--dsw-alias-warn, rgba(212,140,0,0.75))',
         background: 'transparent',
@@ -523,89 +514,6 @@ window.__ModuleLoader__.load({
         fontFamily: FONT_MONO,
         fontSize: '11.5px',
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
-        wordBreak: 'break-word',
-      },
-
-      /* ---- diff: the appended tail, one line per message ---- */
-      diffBox: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '4px',
-        padding: '8px 10px',
-        borderRadius: '8px',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
-        background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
-      },
-      diffHead: {
-        display: 'flex',
-        alignItems: 'baseline',
-        flexWrap: 'wrap',
-        gap: '8px',
-        fontSize: '12px',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-      },
-      diffList: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2px',
-        /* ~40vh: a 29-step Turn adds nearly 60 rows, and a 132px window showed
-           six of them. The panel is inside a scrollable dialog body, so growing
-           past this only means one more scroll region unless we cap it here. */
-        maxHeight: '40vh',
-        overflowY: 'auto',
-      },
-      diffRow: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2px',
-        fontSize: '12px',
-        lineHeight: '18px',
-        padding: '1px 4px',
-        borderRadius: '4px',
-      },
-      diffRowTop: {
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: '8px',
-      },
-      diffToggle: {
-        flex: '0 0 auto',
-        minWidth: '14px',
-        padding: '0',
-        border: 'none',
-        background: 'transparent',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-        cursor: 'pointer',
-        fontSize: '10px',
-        lineHeight: '16px',
-      },
-      diffOpen: {
-        marginLeft: '22px',
-        paddingLeft: '8px',
-        borderLeft: '2px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
-      },
-      diffRole: {
-        flex: '0 0 auto',
-        minWidth: '68px',
-        fontWeight: 600,
-        fontVariantNumeric: 'tabular-nums',
-      },
-      diffIndex: {
-        flex: '0 0 auto',
-        minWidth: '34px',
-        color: 'var(--dsw-alias-label-secondary, #5b6472)',
-        fontVariantNumeric: 'tabular-nums',
-      },
-      /* The summary line wraps to at most two lines instead of ellipsing to one:
-         "pwsh · cd E:\…" is short, but a "tool" result can be a sentence and the
-         difference between a success and an error is the tail. */
-      diffSummary: {
-        flex: '1 1 auto',
-        minWidth: '0',
-        display: '-webkit-box',
-        WebkitLineClamp: 2,
-        WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
         wordBreak: 'break-word',
       },
 
@@ -732,6 +640,27 @@ window.__ModuleLoader__.load({
         borderLeft: '2px solid transparent',
         marginLeft: '-10px',
         paddingLeft: '10px',
+      },
+      /* The same rail, dashed, for the messages this call appended on top of the
+         previous one — "what is new here" read off the tree itself instead of a
+         second panel listing the same messages. */
+      jsonFresh: {
+        borderLeft: '2px dashed transparent',
+        marginLeft: '-10px',
+        paddingLeft: '10px',
+      },
+      /* The rule drawn where the previous call's payload ends. */
+      jsonFreshSep: {
+        display: 'flex',
+        alignItems: 'center',
+        margin: '5px 0 4px',
+        paddingTop: '5px',
+        borderTop: '1px dashed var(--dsw-alias-border-l2)',
+        fontFamily: FONT_MONO,
+        fontSize: '10.5px',
+        letterSpacing: '0.02em',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
       },
       /* The "1838 items · history 1814 · this turn 24" summary on the array head. */
       jsonBadge: {
@@ -2274,11 +2203,6 @@ window.__ModuleLoader__.load({
         if (stableJSON(a) !== stableJSON(b)) changed.push(key);
       }
 
-      const added = [];
-      for (let i = common; i < after.length; i += 1) {
-        added.push({ index: i, role: after[i].role, head: headOf(after[i]), message: after[i] });
-      }
-
       /* Anything the previous request had that this one does not, or that sits
          before the prefix break, was rewritten rather than appended. Cheap case
          first: when the previous fold is a reference prefix nothing was removed. */
@@ -2290,9 +2214,12 @@ window.__ModuleLoader__.load({
       }
 
       return {
-        /* The index where the new tail starts in THIS request. */
+        /* The index where the new tail starts in THIS request — the JSON view
+           bands every message from here on, so this is the only number the
+           presentation needs. */
         prefix: common,
-        added: added,
+        /* How many messages were appended since the previous call. */
+        added: after.length - common,
         removed: removed,
         rewritten: common < limit && before[common] !== after[common] && !sameMessage(before[common], after[common]),
         changed: changed,
@@ -2716,6 +2643,11 @@ window.__ModuleLoader__.load({
            finds them without reading a single role name. */
         currentBorder: '#2f6fed',
         currentBg: 'rgba(47,111,237,0.07)',
+        /* Messages this call appended on top of the previous one: green reads as
+           "added" (the convention every diff view uses) and stays clear of the
+           blue turn rail and of the tool-status colours. */
+        freshBorder: '#1a7f37',
+        freshBg: 'rgba(26,127,55,0.06)',
         /* Source families, in the order the bar stacks them. */
         famPrompt: '#2f6fed',
         famInjected: '#b26a00',
@@ -2744,6 +2676,8 @@ window.__ModuleLoader__.load({
         scThumbActive: '#5a8cff',
         currentBorder: '#5a8cff',
         currentBg: 'rgba(90,140,255,0.13)',
+        freshBorder: '#3fb950',
+        freshBg: 'rgba(63,185,80,0.12)',
         famPrompt: '#5a8cff',
         famInjected: '#d29922',
         famModel: '#d2a8ff',
@@ -2839,6 +2773,15 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------ JSON tree
+
+    /** The red-rimmed pill used for "this payload is not a plain append". */
+    function warnPill(pal) {
+      return Object.assign({}, STYLE.jsonBadge, {
+        color: pal.toolErr,
+        borderColor: pal.toolErr,
+        background: pal.toolErrBg,
+      });
+    }
 
     function valueStyle(value, pal) {
       if (typeof value === 'string') return { color: pal.string };
@@ -3088,15 +3031,33 @@ window.__ModuleLoader__.load({
       const isArray = Array.isArray(value);
       const isContainer = value !== null && typeof value === 'object';
       const indentation = { paddingLeft: depth * 14 + 'px' };
-      const split = isArray && name === 'messages' && typeof props.messagesHistoryEnd === 'number';
+      /* `messages` is the one array the pane knows how to annotate: where the
+         Turn's own messages start, and where the previous call's payload ended.
+         The two marks are independent — a request whose Turn boundary is unknown
+         can still say what this call appended. */
+      const messagesArray = isArray && name === 'messages';
+      const split = messagesArray && typeof props.messagesHistoryEnd === 'number';
       const historyEnd = split ? Math.max(0, Math.min(props.messagesHistoryEnd, value.length)) : 0;
+      /* "New since the previous call" is drawn HERE, on the array itself: the
+         previous request is a prefix of this one, so everything from `prefix` on
+         was appended by this step. A separate panel listing those messages meant
+         reading the same lines twice and scrolling between two scroll boxes. */
+      const diffInfo = messagesArray && props.messagesDiff && typeof props.messagesDiff === 'object' ? props.messagesDiff : null;
+      const freshStart =
+        diffInfo && typeof diffInfo.prefix === 'number' ? Math.max(0, Math.min(diffInfo.prefix, value.length)) : -1;
+      const freshCount = freshStart >= 0 ? value.length - freshStart : 0;
       const band =
-        props.current === true
-          ? Object.assign({}, STYLE.jsonCurrent, {
-              borderLeftColor: pal.currentBorder,
-              background: pal.currentBg,
+        props.fresh === true
+          ? Object.assign({}, STYLE.jsonFresh, {
+              borderLeftColor: pal.freshBorder,
+              background: pal.freshBg,
             })
-          : null;
+          : props.current === true
+            ? Object.assign({}, STYLE.jsonCurrent, {
+                borderLeftColor: pal.currentBorder,
+                background: pal.currentBg,
+              })
+            : null;
       /* The message this dialog was opened from: banded so it is findable, and
          tagged with a DOM id so DialogBody can scroll the body to it. */
       const focusBand = props.focus === true ? STYLE.jsonFocus : null;
@@ -3107,6 +3068,7 @@ window.__ModuleLoader__.load({
          request root. */
       const childProps = {};
       if (typeof props.messagesHistoryEnd === 'number') childProps.messagesHistoryEnd = props.messagesHistoryEnd;
+      if (props.messagesDiff && typeof props.messagesDiff === 'object') childProps.messagesDiff = props.messagesDiff;
       if (Array.isArray(props.messageLinks)) childProps.messageLinks = props.messageLinks;
       if (typeof props.onJump === 'function') childProps.onJump = props.onJump;
       if (typeof props.focusKey === 'string') childProps.focusKey = props.focusKey;
@@ -3192,6 +3154,37 @@ window.__ModuleLoader__.load({
         split && historyEnd > 0
           ? h('span', { key: 'his', style: Object.assign({}, STYLE.jsonBadgeMuted, { color: pal.punct }) }, TEXT.history + ' ' + historyEnd)
           : null,
+        messagesArray && freshCount > 0
+          ? h(
+              'span',
+              {
+                key: 'fresh',
+                style: Object.assign({}, STYLE.jsonBadge, {
+                  color: pal.freshBorder,
+                  borderColor: pal.freshBorder,
+                  background: pal.freshBg,
+                }),
+              },
+              '+' + freshCount + ' ' + TEXT.diffAdded,
+            )
+          : null,
+        /* Anything that is not a plain append gets said out loud: a compacted
+           payload is shorter than the previous one, and a changed sampling
+           parameter changes every message's meaning without changing one of
+           them. Both are one chip, not a paragraph. */
+        messagesArray && diffInfo && diffInfo.removed > 0
+          ? h('span', { key: 'gone', style: warnPill(pal) }, '−' + diffInfo.removed + ' ' + TEXT.diffRemoved)
+          : null,
+        messagesArray && diffInfo && diffInfo.rewritten === true
+          ? h('span', { key: 'rw', style: warnPill(pal) }, TEXT.diffRewritten)
+          : null,
+        messagesArray && diffInfo && Array.isArray(diffInfo.changed) && diffInfo.changed.length
+          ? h(
+              'span',
+              { key: 'chg', style: warnPill(pal) },
+              TEXT.diffChanged + ': ' + diffInfo.changed.join(', '),
+            )
+          : null,
         props.jump && !isArray
           ? h(
               'span',
@@ -3219,35 +3212,68 @@ window.__ModuleLoader__.load({
       const onJump = props.onJump;
       const focusKey = props.focusKey;
       const markFocus = (link) => (focusKey && link && link.key === focusKey ? true : false);
-      if (isArray && split && historyEnd > 0) {
-        children = [
-          h(JsonHistoryGroup, {
-            key: 'history',
-            items: value.slice(0, historyEnd),
-            offset: 0,
-            depth: depth + 1,
-            mode: mode,
-            pal: pal,
-            links: links ? links.slice(0, historyEnd) : null,
-            onJump: onJump,
-            focusKey: focusKey,
-          }),
-        ].concat(
-          value.slice(historyEnd).map((item, index) =>
-            h(JsonNode, Object.assign({
-              key: historyEnd + index,
-              name: String(historyEnd + index),
-              value: item,
-              depth: depth + 1,
-              mode: mode,
-              pal: pal,
-              current: true,
-              jump: links ? links[historyEnd + index] || null : null,
-              onJump: onJump,
-              focus: markFocus(links ? links[historyEnd + index] : null),
-            }, forwarded)),
-          ),
-        );
+      if (messagesArray && (split || diffInfo)) {
+        const tail = [];
+        for (let index = historyEnd; index < value.length; index += 1) {
+          const link = links ? links[index] || null : null;
+          const fresh = freshStart >= 0 && index >= freshStart;
+          if (fresh && index === freshStart && freshStart >= historyEnd) {
+            tail.push(
+              h(
+                'div',
+                { key: 'fresh-sep', style: Object.assign({}, STYLE.jsonFreshSep, { color: pal.freshBorder }) },
+                /* The boundary the reader came for: everything above came from the
+                   previous call, everything below was appended by this one. */
+                TEXT.diffBoundary +
+                  ' ' +
+                  formatExact(freshStart) +
+                  ' ' +
+                  TEXT.messages +
+                  '  ↓  ' +
+                  TEXT.diffBoundaryTail +
+                  ' ' +
+                  formatExact(freshCount),
+              ),
+            );
+          }
+          tail.push(
+            h(
+              JsonNode,
+              Object.assign(
+                {
+                  key: index,
+                  name: String(index),
+                  value: value[index],
+                  depth: depth + 1,
+                  mode: mode,
+                  pal: pal,
+                  current: !fresh,
+                  fresh: fresh,
+                  jump: link,
+                  onJump: onJump,
+                  focus: markFocus(link),
+                },
+                forwarded,
+              ),
+            ),
+          );
+        }
+        children =
+          historyEnd > 0
+            ? [
+                h(JsonHistoryGroup, {
+                  key: 'history',
+                  items: value.slice(0, historyEnd),
+                  offset: 0,
+                  depth: depth + 1,
+                  mode: mode,
+                  pal: pal,
+                  links: links ? links.slice(0, historyEnd) : null,
+                  onJump: onJump,
+                  focusKey: focusKey,
+                }),
+              ].concat(tail)
+            : tail;
       } else if (isArray) {
         children = value.map((item, index) =>
           h(
@@ -3277,142 +3303,6 @@ window.__ModuleLoader__.load({
             h('span', { style: { color: pal.punct } }, isArray ? ']' : '}'),
           ),
         ),
-      );
-    }
-
-    /**
-     * "What changed since the previous call?" — one line per appended message,
-     * plus an explicit warning whenever the payload was not merely extended.
-     *
-     * Within a Turn the Harness only appends, so the interesting cases are: the
-     * model's reply and tool results of the previous step showing up at the tail
-     * (expected), a message silently disappearing (compaction), or the sampling
-     * parameters changing between calls. Each of those gets its own chip so the
-     * reader never mistakes one for another.
-     */
-    function DiffPanel(props) {
-      const diff = props.diff;
-      const pal = props.pal || PALETTES.light;
-      if (!diff || typeof diff !== 'object') return null;
-
-      const added = Array.isArray(diff.added) ? diff.added : [];
-      const changed = Array.isArray(diff.changed) ? diff.changed : [];
-
-      const head = [
-        h(
-          'span',
-          { key: 'l', style: STYLE.chipValue, title: TEXT.diffPrevTitle },
-          TEXT.diffTitle + ' ' + (diff.prevMessages || 0) + ' ' + TEXT.messages,
-        ),
-        h(
-          'span',
-          { key: 'a', style: Object.assign({}, STYLE.chip, STYLE.chipAdded) },
-          h('span', { key: 'l', style: STYLE.chipLabel }, TEXT.diffAdded),
-          h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipAddedValue) }, '+' + added.length),
-        ),
-        diff.removed > 0
-          ? h(
-              'span',
-              { key: 'r', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
-              h('span', { key: 'l', style: STYLE.chipLabel }, TEXT.diffRemoved),
-              h(
-                'span',
-                { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) },
-                '-' + diff.removed,
-              ),
-            )
-          : null,
-        diff.rewritten
-          ? h(
-              'span',
-              { key: 'w', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
-              h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) }, TEXT.diffRewritten),
-            )
-          : null,
-        changed.length
-          ? h(
-              'span',
-              { key: 'c', style: Object.assign({}, STYLE.chip, STYLE.chipWarn) },
-              h('span', { key: 'v', style: Object.assign({}, STYLE.chipValue, STYLE.chipWarnValue) },
-                TEXT.diffChanged + ': ' + changed.join(', ')),
-            )
-          : null,
-      ];
-
-      const roleColour = {
-        user: pal.famPrompt,
-        system: pal.famInjected,
-        developer: pal.famInjected,
-        assistant: pal.famModel,
-        tool: pal.famTool,
-      };
-
-      /* Each row is expandable: the summary line says what the message is, and
-         clicking it opens the message verbatim as a foldable JSON tree. Without
-         that, "the diff is incomplete" was the honest reading — a summary of a
-         4.4 MB payload cannot be complete, so the full text has to be one click
-         away rather than a 96-character ellipsis. */
-      const [openRows, setOpenRows] = React.useState({});
-      const toggleRow = (index) => {
-        setOpenRows((previous) => {
-          const next = Object.assign({}, previous);
-          if (next[index]) delete next[index];
-          else next[index] = true;
-          return next;
-        });
-      };
-
-      const rows = added.map((entry) => {
-        const open = openRows[entry.index] === true;
-        const message = entry.message;
-        return h(
-          'div',
-          { key: 'add-' + entry.index, style: STYLE.diffRow },
-          h(
-            'div',
-            { key: 'top', style: STYLE.diffRowTop },
-            h(
-              'button',
-              {
-                key: 'toggle',
-                type: 'button',
-                className: 'dsh-pl-btn',
-                style: STYLE.diffToggle,
-                title: open ? TEXT.collapse : TEXT.expand,
-                'aria-expanded': open ? 'true' : 'false',
-                onClick: () => toggleRow(entry.index),
-              },
-              open ? '▾' : '▸',
-            ),
-            h('span', { key: 'i', style: STYLE.diffIndex }, '+' + entry.index),
-            h(
-              'span',
-              { key: 'r', style: Object.assign({}, STYLE.diffRole, { color: roleColour[entry.role] || pal.punct }) },
-              entry.role,
-            ),
-            h(
-              'span',
-              { key: 'h', style: Object.assign({}, STYLE.diffSummary, { color: pal.text }) },
-              entry.head || '—',
-            ),
-          ),
-          open && message !== undefined
-            ? h(
-                'div',
-                { key: 'open', style: STYLE.diffOpen },
-                h(JsonNode, { key: 'node', name: null, value: message, depth: 0, mode: 'default', pal: pal }),
-              )
-            : null,
-        );
-      });
-
-      return h(
-        'div',
-        { key: 'diff', style: STYLE.diffBox },
-        h('div', { key: 'head', style: STYLE.diffHead }, head),
-        added.length
-          ? h('div', { key: 'list', style: STYLE.diffList }, rows)
-          : h('div', { key: 'same', style: STYLE.diffHead }, TEXT.diffSame),
       );
     }
 
@@ -3499,11 +3389,6 @@ window.__ModuleLoader__.load({
      * The header's diff slot: the first call of a Turn has nothing to compare
      * against, and saying so is better than showing an empty panel.
      */
-    function DiffSlot(props) {
-      if (!props.diff) return h('div', { key: 'diff-first', style: STYLE.diffHead }, TEXT.diffFirst);
-      return h(DiffPanel, { key: 'diff', diff: props.diff, pal: props.pal });
-    }
-
     /**
      * "Why is this request this long?" — one stacked bar plus a legend.
      *
@@ -4066,9 +3951,10 @@ window.__ModuleLoader__.load({
         ),
         h('div', { key: 'row-meta', style: STYLE.chips }, side === 'response' ? respChips : metaChips),
         h('div', { key: 'row-usage', style: STYLE.chips }, usageChips),
-        /* Diff and source breakdown describe the REQUEST; the reply has no
-           equivalent, so they fold away on the response tab instead of lying. */
-        call && side === 'request' ? h(DiffSlot, { key: 'row-diff', diff: meta.diff, pal: pal }) : null,
+        /* The source breakdown describes the REQUEST; the reply has no
+           equivalent, so it folds away on the response tab instead of lying.
+           The "what changed since the previous call" marks live inside the
+           `messages` array itself, so there is no third row here any more. */
         callCount > 1
           ? h(Timeline, {
               key: 'row-timeline',
@@ -4308,6 +4194,10 @@ window.__ModuleLoader__.load({
               pal: pal,
               /* Where this Turn's own messages start inside request.messages. */
               messagesHistoryEnd: meta.historyEnd,
+              /* And where the previous call's payload ended: everything after it
+                 is banded as new. Null on a Turn's first call — there is nothing
+                 to compare against, so nothing is marked. */
+              messagesDiff: meta.diff || null,
               /* One conversation-row target per message, so a row can jump. */
               messageLinks: meta.messageLinks,
               /* One display-ready entry per tool call this step made, paired with

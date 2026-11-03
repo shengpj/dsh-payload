@@ -97,6 +97,14 @@
 - 数值验证：`verify-against-session.cjs` 断言 `historyEnd` 落在 `0..messages`、随 step 只增不减、且不小于上一轮最后一次调用已携带的消息数；当前真实会话 30 轮全部成立（如第 24 轮最后一次：1224 条消息里 1076 条历史、148 条本轮）。
 
 
+## 「新增消息」为什么标在 JSON 里而不是单开一个面板
+
+- 曾经有一个「相比上一次调用」的独立面板（`DiffPanel` + `DiffSlot`），把新增消息逐行摘要列出来。问题在于：它和右边的 JSON 是两份东西，摘要再详细也不如原文，「这条到底在第几行」还得自己去数组里找；而且它为了显示摘要，把每条新增消息的完整副本挂在 `call.meta.diff.added` 上——一份 Turn 有 94 次调用时，光这些副本就按调用数×窗口大小膨胀。
+- 现在只留**计数**：`diffRequests` 返回 `{prefix, added: number, removed, rewritten, changed, prevMessages}`，`added` 是数字而不是消息数组，内存开销可以忽略（实测 Turn 87 的 94 次调用，`meta.diff` 合计 8.1 KB）。渲染时 `JsonNode` 拿到 `messagesDiff`，把下标 `>= prefix` 的行换成绿色轨道（`STYLE.jsonFresh`：`borderLeft: '2px dashed transparent'` 由父层按 `pal.freshBorder/freshBg` 上色）并在行首挂 `新增` 胶囊；`prefix` 处插一条 `STYLE.jsonFreshSep` 虚线，写着「上一次调用已有 n 条 · 以下为本次新增 m 条」。
+- 一个细节：虚线的「轨道」必须和 `jsonGuide` 的引导线同宽同位（`marginLeft:-10px` + `paddingLeft:10px`），否则连续新增段会看起来断成几截。烟雾测试断言虚线轨数 = 新增条数，就是防这个。
+- 判定依据是数组前缀比较（`stableJSON` 仅在首尾不等时兜底），所以「内容没变、位置挪了」不会被算成新增；`removed > 0` 单独报 `消失 n`，因为那是压缩的痕迹，不是新增。
+
+
 ## 响应侧（重建的 chat-completion 响应）
 
 - 数据来源全部是这一步自己的记录：`assistant/message` 给正文（`content` 分块：`text` / `reasoning` / `tool-call`）、`usage` 和 `source`（真实 model/provider）；它 `.data.stream` 末尾的 `finish` 分块给出结束原因（`kind` + `failure{message, code, status}`）；`assistant/attempt` 是这一步失败过的每一次尝试，各自也带一份 `stream`/`finish`；时间从分块的 `time`（或 `time0 + dt[]`）里还原，`step/start.time` 到第一个分块是「首字节」，首尾之差是「总时长」。
