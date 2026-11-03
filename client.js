@@ -129,7 +129,7 @@ window.__ModuleLoader__.load({
           /* 响应侧：这一屏回答"模型回了什么"，与请求侧一一对应。 */
           viewRequest: '请求',
           viewResponse: '响应',
-          viewTitle: '每一步右边都能切换：看这一步发出去的请求体，或它收到的回复',
+          viewTitle: 'JSON 右上角切换：看这一步发出去的请求体，或它收到的回复',
           responseNone: '日志里没有这次调用的回复记录（可能被中断或仍在流式返回）。',
           finishLabel: '结束原因',
           finishStop: '正常结束',
@@ -251,7 +251,7 @@ window.__ModuleLoader__.load({
           noUsage: 'no usage',
           viewRequest: 'Request',
           viewResponse: 'Response',
-          viewTitle: 'Every step has both sides: the request it sent, and the reply it got',
+          viewTitle: "Switch at the JSON pane's top-right: the request this step sent, or the reply it got",
           responseNone: 'No reply recorded for this call in the log (interrupted, or still streaming).',
           finishLabel: 'finish',
           finishStop: 'stopped',
@@ -420,26 +420,35 @@ window.__ModuleLoader__.load({
       },
       chipErrorValue: { color: 'var(--dsw-alias-danger, #b42318)' },
 
-      /* ---- the 请求 / 响应 pair on every step row ---- */
+      /* ---- the JSON pane: one bar on top-right, then the scrolling body ---- */
+      pane: {
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minWidth: 0,
+        minHeight: 0,
+      },
+      paneBar: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: '4px',
+        flex: '0 0 auto',
+        padding: '0 0 8px',
+      },
       sides: {
         display: 'inline-flex',
         alignItems: 'center',
         gap: '2px',
         flex: '0 0 auto',
-        marginLeft: 'auto',
-        paddingLeft: '8px',
-        /* The pair is a second target inside the card, so it must not swallow
-           clicks meant for the card itself. */
-        position: 'relative',
-        zIndex: 1,
       },
       sideBtn: {
         font: 'inherit',
-        fontSize: '11px',
+        fontSize: '11.5px',
         lineHeight: '18px',
         fontWeight: '600',
-        height: '20px',
-        padding: '0 7px',
+        height: '24px',
+        padding: '0 10px',
         border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.32))',
         borderRadius: '6px',
         background: 'transparent',
@@ -4080,21 +4089,15 @@ window.__ModuleLoader__.load({
           : null,
       );
 
-      /* Every step row carries its own 请求 / 响应 pair. The side belongs to the
-         step you are looking at, so there is no switch on top of the dialog and
-         no second step picker for the other half: picking a side picks the step
-         too. A one-call Turn still shows its single row, which is where the pair
-         lives when there is nothing to pick. */
-      const pickSide = (position, next) => {
-        setSelected(position);
-        setSide(next);
-      };
-
-      const renderSides = (position, itemMeta) => {
-        const active = position === index;
-        const hasReply = Boolean(itemMeta && itemMeta.response);
-        const requestOn = active && side === 'request';
-        const responseOn = active && side === 'response';
+      /* The 请求 / 响应 pair sits in the JSON pane's own top-right corner: the step
+         is chosen in the picker (cards, or the left column past TAB_LIMIT), the side
+         is chosen where the content appears, so neither control has to be repeated
+         per row and no row has to be scanned twice. */
+      const renderPaneSides = () => {
+        const itemMeta = meta || {};
+        const hasReply = Boolean(itemMeta.response);
+        const requestOn = side === 'request';
+        const responseOn = side === 'response';
         return h(
           'span',
           { key: 'sides', style: STYLE.sides },
@@ -4105,7 +4108,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               'aria-pressed': requestOn ? 'true' : 'false',
               className: requestOn ? 'dsh-pl-side dsh-pl-side-on' : 'dsh-pl-side',
-              onClick: () => pickSide(position, 'request'),
+              onClick: () => setSide('request'),
               style: Object.assign({}, STYLE.sideBtn, requestOn ? STYLE.sideBtnActive : null),
             },
             TEXT.viewRequest,
@@ -4122,7 +4125,7 @@ window.__ModuleLoader__.load({
                 : hasReply
                   ? 'dsh-pl-side'
                   : 'dsh-pl-side dsh-pl-side-off',
-              onClick: () => pickSide(position, 'response'),
+              onClick: () => setSide('response'),
               style: Object.assign(
                 {},
                 STYLE.sideBtn,
@@ -4188,7 +4191,6 @@ window.__ModuleLoader__.load({
                       : ''),
                 ),
               ),
-              renderSides(position, itemMeta),
             );
           }),
         );
@@ -4280,7 +4282,6 @@ window.__ModuleLoader__.load({
                       : ''),
                 ),
               ),
-              renderSides(position, itemMeta),
             );
           }),
         );
@@ -4320,6 +4321,12 @@ window.__ModuleLoader__.load({
           : h('div', { style: STYLE.note }, TEXT.empty),
       );
 
+      const pane = h('div', { key: 'pane', style: STYLE.pane }, h(
+        'div',
+        { key: 'pane-bar', style: STYLE.paneBar },
+        call ? renderPaneSides() : null,
+      ), body);
+
       /* Only worth saying when the log carries far more than the model reads — and
          only on the request tab, which is what the note is about. */
       const foot =
@@ -4341,7 +4348,7 @@ window.__ModuleLoader__.load({
         { style: dialogStyle, onClick: (event) => event.stopPropagation() },
         header,
         picker,
-        stepList ? h('div', { key: 'split', style: STYLE.split }, stepList, body) : body,
+        stepList ? h('div', { key: 'split', style: STYLE.split }, stepList, pane) : pane,
         foot,
       );
     }

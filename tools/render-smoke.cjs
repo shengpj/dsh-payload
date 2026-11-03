@@ -756,104 +756,134 @@ expect(
   'a missing response object did not say so',
 );
 
-/* o) One 请求 / 响应 pair per step: the side belongs to the step being looked at,
-      so there is no switch above the JSON and no second step picker for the
-      other half. Picking a side picks the step with it. */
+/* o) The 请求 / 响应 pair lives in the JSON pane's top-right corner; the picker
+      holds the steps only. One pair for the whole dialog, bound to the selected
+      step: flip the side and the pane swaps, the step selection stays. */
 
-/* A single step still shows its pair — that is the only control left. */
-const singleSink = mountWalk(() => DialogBody({ payload: payload([makeCall(1, 1, 7, 14056)]) }));
-const singleSides = singleSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side'));
-expect(singleSides.length === 2, 'a single step should still show 请求 + 响应, got ' + singleSides.length);
-expect(
-  singleSides.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
-  'exactly one side should be selected',
-);
-expect(
-  /请求|Request/.test(singleSink.text.join(' ')) && /响应|Response/.test(singleSink.text.join(' ')),
-  'the side pair is not labelled',
-);
-expect(
-  !singleSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-seg')),
-  'a switch is still rendered above the JSON',
-);
-
-/* Three steps: one pair each, still exactly one selected side. */
 const sideCalls = [makeCall(1, 5, 7, 100), makeCall(2, 6, 9, 200), makeCall(3, 7, 11, 300)];
-const threeSideSink = mountWalk(() => DialogBody({ payload: payload(sideCalls) }));
-const pairCount = threeSideSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side')).length;
-expect(pairCount === 6, 'expected one 请求/响应 pair per step, got ' + pairCount);
-expect(
-  threeSideSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
-  'the selected side should be exactly one across all steps',
-);
-
-/* A step whose call never got a reply marks its 响应 button as empty. */
-sideCalls[2].meta.response = { finish: null, attempts: [], timing: null, stats: null, body: null };
-const offSink = mountWalk(() => DialogBody({ payload: payload(sideCalls) }));
-expect(
-  offSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-side-off')),
-  'a step without a reply does not mark its 响应 button',
-);
-
-/* Clicking 响应 on step 2 selects that step AND that side in one gesture: the
-   reply replaces the request in the same pane. */
-sideCalls[1].meta.response = {
-  finish: { kind: 'tool-calls', failure: null },
-  attempts: [],
-  timing: { ttfbMs: 412, spanMs: 2600, records: 12 },
-  stats: { textChars: 10, reasoningChars: 0, toolCalls: 1, blocks: 2 },
-  body: {
-    id: 'chatcmpl-smoke',
-    object: 'chat.completion',
-    model: 'deepseek-v4.1-flash',
-    choices: [
-      {
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: null,
-          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read', arguments: '{"a":1}' } }],
+const giveReply = (target, id) => {
+  target.meta.response = {
+    finish: { kind: 'tool-calls', failure: null },
+    attempts: [],
+    timing: { ttfbMs: 412, spanMs: 2600, records: 12 },
+    stats: { textChars: 10, reasoningChars: 0, toolCalls: 1, blocks: 2 },
+    body: {
+      id: id,
+      object: 'chat.completion',
+      model: 'deepseek-v4.1-flash',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read', arguments: '{"a":1}' } }],
+          },
+          finish_reason: 'tool_calls',
         },
-        finish_reason: 'tool_calls',
+      ],
+      usage: {
+        prompt_tokens: 200,
+        completion_tokens: 20,
+        total_tokens: 220,
+        prompt_tokens_details: { cached_tokens: 0 },
       },
-    ],
-    usage: { prompt_tokens: 200, completion_tokens: 20, total_tokens: 220, prompt_tokens_details: { cached_tokens: 0 } },
-  },
+    },
+  };
 };
+/* The last step gets no reply, so the dimmed half is testable. */
+giveReply(sideCalls[0], 'chatcmpl-smoke-1');
+giveReply(sideCalls[1], 'chatcmpl-smoke-2');
 
 const gestureRoot = () => DialogBody({ payload: payload(sideCalls) });
 const beforeSink = mountWalk(gestureRoot);
-const responseButtons = beforeSink.buttons.filter((node) => /^(响应|Response)$/.test(labelOf(node, 0).trim()));
-expect(responseButtons.length === 3, 'expected one 响应 button per step, got ' + responseButtons.length);
-/* Request side is what the button promised, so it is what opens. */
+
+const pairCount = beforeSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side')).length;
+expect(pairCount === 2, 'expected exactly one 请求/响应 pair in the pane, got ' + pairCount);
+expect(
+  beforeSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
+  'exactly one side should be selected',
+);
+expect(
+  /请求|Request/.test(beforeSink.text.join(' ')) && /响应|Response/.test(beforeSink.text.join(' ')),
+  'the side pair is not labelled',
+);
+expect(
+  !beforeSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-seg')),
+  'a switch is still rendered above the JSON',
+);
+
+const cardsOf = (sink) =>
+  sink.buttons.filter((node) =>
+    String((node.props || {}).className || '').split(/\s+/).includes('dsh-pl-tabhit'),
+  );
+const cardCount = cardsOf(beforeSink).length;
+expect(cardCount === 3, 'expected three step cards, got ' + cardCount);
+expect(
+  pairCount === 2 && cardCount === 3,
+  'the pair is repeated per card instead of living once in the pane',
+);
+
+const pickStep = (sink, label) => cardsOf(sink).filter((node) => labelOf(node, 0).trim().startsWith(label))[0];
+
+/* Selecting the reply-less step dims the 响应 half. */
+const thirdCard = pickStep(beforeSink, '#3');
+expect(Boolean(thirdCard), 'the third step card is missing');
+thirdCard.props.onClick();
+const thirdSink = rerender(gestureRoot);
+expect(
+  thirdSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-side-off')),
+  'a step without a reply does not dim its 响应 button',
+);
+
+/* Selecting one that has a reply clears the dim. */
+const secondCard = pickStep(thirdSink, '#2');
+expect(Boolean(secondCard), 'the second step card is missing');
+secondCard.props.onClick();
+const secondSink = rerender(gestureRoot);
+expect(
+  !secondSink.classes.some((c) => c.split(/\s+/).includes('dsh-pl-side-off')),
+  'a step that has a reply still dims its 响应 button',
+);
+
 /* The reply half is the one that reports a first byte, so that label is the
    marker for "which side is up" — the request half never carries it. */
 const replyOpen = (sink) => /首字节|first byte/.test(sink.text.join(' '));
-expect(!replyOpen(beforeSink), 'the dialog did not open on the request side');
+expect(!replyOpen(secondSink), 'the dialog did not open on the request side');
 
-if (responseButtons[1]) responseButtons[1].props.onClick();
+const sideButton = (sink, pattern) =>
+  sink.buttons.filter((node) => pattern.test(labelOf(node, 0).trim()))[0];
+
+const responseButton = sideButton(secondSink, /^(响应|Response)$/);
+expect(Boolean(responseButton), 'the pane has no 响应 button');
+responseButton.props.onClick();
 const afterSink = rerender(gestureRoot);
-const afterText = afterSink.text.join(' ');
 expect(replyOpen(afterSink), 'the request side is still on screen after clicking 响应');
-expect(/chatcmpl-smoke/.test(afterText), 'the reply body did not replace the request body');
+expect(
+  /chatcmpl-smoke-2/.test(afterSink.text.join(' ')),
+  'the reply of the selected step did not replace the request body',
+);
 expect(
   afterSink.classes.filter((c) => c.split(/\s+/).includes('dsh-pl-side-on')).length === 1,
   'the selected side should still be exactly one after switching',
 );
+expect(
+  Boolean(pickStep(afterSink, '#2')) &&
+    String(pickStep(afterSink, '#2').props.className || '').split(/\s+/).includes('dsh-pl-tabhit'),
+  'the step selection was lost when the side changed',
+);
 
-/* ...and clicking 请求 on the same step goes back, without losing the step. */
-const requestButtons = afterSink.buttons.filter((node) => /^(请求|Request)$/.test(labelOf(node, 0).trim()));
-if (requestButtons[1]) requestButtons[1].props.onClick();
+/* ...and 请求 goes back, still on the same step. */
+const requestButton = sideButton(afterSink, /^(请求|Request)$/);
+expect(Boolean(requestButton), 'the pane has no 请求 button');
+requestButton.props.onClick();
 const backSink = rerender(gestureRoot);
 expect(!replyOpen(backSink), 'switching back to 请求 did not restore the request body');
-expect(
-  /"messages"|messages/.test(backSink.text.join(' ')),
-  'the JSON tree is gone after switching back',
-);
+expect(/messages/.test(backSink.text.join(' ')), 'the JSON tree is gone after switching back');
 
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=step-sides');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=pane-sides');
 if (problems.length === 0) {
   console.log('=== render smoke ok: 15 scenarios, no problem(s) ===');
 } else {
