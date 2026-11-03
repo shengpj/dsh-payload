@@ -13,6 +13,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -42,6 +43,23 @@ if (!args.commit || !args.version) {
 }
 if (!/^[0-9a-f]{40}$/u.test(args.commit)) throw new Error('--commit must be a lowercase 40-hex-digit SHA')
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(args.version)) throw new Error('--version must be an exact SemVer version')
+
+/* A pinned entry is only useful if the commit exists and is on this branch: a
+   typo'd SHA passes every syntactic check and then fails at install time, for
+   whoever tries to install it. Verify against git before writing. */
+try {
+  execFileSync('git', ['rev-parse', '--verify', '--quiet', `${args.commit}^{commit}`], {
+    cwd: ROOT,
+    stdio: 'pipe',
+  })
+} catch {
+  throw new Error(`--commit ${args.commit} does not exist in this repository`)
+}
+try {
+  execFileSync('git', ['merge-base', '--is-ancestor', args.commit, 'HEAD'], { cwd: ROOT, stdio: 'pipe' })
+} catch {
+  throw new Error(`--commit ${args.commit} is not an ancestor of HEAD — push it, or pin the merge commit`)
+}
 
 const publishTimestamp = args.timestamp === undefined
   ? Math.floor(Date.now() / 1000)
