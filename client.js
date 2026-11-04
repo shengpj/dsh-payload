@@ -273,24 +273,55 @@ window.__ModuleLoader__.load({
         };
 
     /* Chrome text inherits the app font, so the dialog sits in the same typographic
-       world as the rest of the Harness; only the payload switches to mono. Every
-       size below comes from one four-step scale (14 title / 13 control / 12 text /
-       11.5 micro) so nothing looks borrowed from a different product. */
+       world as the rest of the Harness; only the payload switches to mono.
+
+       Everything visual goes through T below. The dialog used to carry its own
+       sizes (10.5 / 11 / 11.5 / 12 / 12.5 / 14 and six radii), which is exactly what
+       made it read as a window from another product: the Harness ships four type
+       steps, three semantic radii and hairline borders, and a neighbour speaking
+       five sub-pixel sizes has no rhythm next to it. */
     const FONT_MONO =
       'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
+
+    const T = {
+      /* 13/18 controls, 14/22 body, 12/18 captions, 11 micro. Nothing in between:
+         half-pixel sizes blur at fractional device pixel ratios. */
+      font: { micro: '11px', caption: '12px', control: '13px', body: '14px' },
+      /* The design system's semantic radii, plus pills for meters and count badges.
+         `xs` is only for the segments inside a pill-shaped meter. */
+      radius: {
+        xs: '4px',
+        sm: 'var(--dsw-radius-sm, 8px)',
+        lg: 'var(--dsw-radius-lg, 12px)',
+        panel: 'var(--dsw-radius-panel, 16px)',
+        pill: '999px',
+      },
+      /* Hairline chrome: the shipped dialogs and chips draw 0.5px at border-l4. A
+         1px line at border-l1 is what made every control look greyed out. The nested
+         fallbacks keep older themes (which publish only l1) legible. */
+      hair: '0.5px solid var(--dsw-alias-border-l4, var(--dsw-alias-border-l1, rgba(127,127,127,0.28)))',
+      hairDashed:
+        '0.5px dashed var(--dsw-alias-border-l4, var(--dsw-alias-border-l1, rgba(127,127,127,0.28)))',
+      /* Focus ring: the same token pair the shipped chips use, so the keyboard state
+         follows the theme instead of a hardcoded brand blue. */
+      focus:
+        'var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #2f6fed))',
+      /* 28px is the shipped chip height; nothing interactive goes below it. */
+      hit: { sm: '28px' },
+    };
 
     const STYLE = {
       smallButton: {
         font: 'inherit',
-        fontSize: '12px',
-        lineHeight: '20px',
+        fontSize: T.font.control,
+        lineHeight: '18px',
         fontWeight: 500,
-        height: '28px',
-        padding: '0 10px',
+        height: T.hit.sm,
+        padding: '0 12px',
         boxSizing: 'border-box',
-        borderRadius: '8px',
+        borderRadius: T.radius.sm,
         cursor: 'pointer',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
+        border: T.hair,
         background: 'transparent',
         color: 'inherit',
         whiteSpace: 'nowrap',
@@ -298,8 +329,8 @@ window.__ModuleLoader__.load({
       },
       note: {
         padding: '12px 16px',
-        fontSize: '12px',
-        lineHeight: '20px',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
 
@@ -327,8 +358,8 @@ window.__ModuleLoader__.load({
         height: '88vh',
         maxHeight: '88vh',
         boxSizing: 'border-box',
-        borderRadius: '12px',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
+        borderRadius: T.radius.panel,
+        border: T.hair,
         background: 'var(--dsw-alias-bg-overlay, #ffffff)',
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
         boxShadow: '0 16px 48px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12)',
@@ -342,7 +373,7 @@ window.__ModuleLoader__.load({
         flexDirection: 'column',
         gap: '10px',
         padding: '12px 16px',
-        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.25))',
+        borderBottom: T.hair,
       },
       headerRow: {
         display: 'flex',
@@ -360,7 +391,7 @@ window.__ModuleLoader__.load({
       dialogTitle: {
         flex: '1 1 auto',
         minWidth: 0,
-        fontSize: '14px',
+        fontSize: T.font.body,
         lineHeight: '22px',
         fontWeight: 600,
         letterSpacing: '-0.005em',
@@ -378,11 +409,11 @@ window.__ModuleLoader__.load({
         display: 'inline-flex',
         alignItems: 'baseline',
         gap: '5px',
-        fontSize: '12px',
-        lineHeight: '20px',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         padding: '0 10px',
-        borderRadius: '999px',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
+        borderRadius: T.radius.sm,
+        border: T.hair,
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.06))',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
         whiteSpace: 'nowrap',
@@ -390,22 +421,22 @@ window.__ModuleLoader__.load({
       chipLabel: { color: 'var(--dsw-alias-label-secondary, #5b6472)' },
       chipValue: {
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
-        fontSize: '12px',
+        fontSize: T.font.caption,
         fontWeight: 600,
         fontVariantNumeric: 'tabular-nums',
       },
       chipAccent: {
-        border: '1px solid var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
+        border: '0.5px solid var(--dsw-alias-brand-primary, rgba(90,140,255,0.9))',
         background: 'transparent',
       },
       chipAccentValue: { color: 'var(--dsw-alias-brand-primary, #2f6feb)' },
       chipWarn: {
-        border: '1px solid var(--dsw-alias-warn, rgba(212,140,0,0.75))',
+        border: '0.5px solid var(--dsw-alias-warn, rgba(212,140,0,0.75))',
         background: 'transparent',
       },
       chipWarnValue: { color: 'var(--dsw-alias-warn, #9a6700)' },
       chipError: {
-        border: '1px solid var(--dsw-alias-danger, rgba(207,34,46,0.75))',
+        border: '0.5px solid var(--dsw-alias-danger, rgba(207,34,46,0.75))',
         background: 'transparent',
       },
       chipErrorValue: { color: 'var(--dsw-alias-danger, #b42318)' },
@@ -434,13 +465,13 @@ window.__ModuleLoader__.load({
       },
       sideBtn: {
         font: 'inherit',
-        fontSize: '11.5px',
+        fontSize: T.font.caption,
         lineHeight: '18px',
         fontWeight: '600',
-        height: '24px',
+        height: T.hit.sm,
         padding: '0 10px',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.32))',
-        borderRadius: '6px',
+        border: T.hair,
+        borderRadius: T.radius.sm,
         background: 'transparent',
         color: 'var(--dsw-alias-label-tertiary, #81858c)',
         cursor: 'pointer',
@@ -480,8 +511,8 @@ window.__ModuleLoader__.load({
         gap: '2px',
         marginBottom: '8px',
         padding: '8px 10px',
-        borderRadius: '8px',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.30))',
+        borderRadius: T.radius.sm,
+        border: T.hair,
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
       },
       attemptRow: {
@@ -489,13 +520,13 @@ window.__ModuleLoader__.load({
         alignItems: 'baseline',
         flexWrap: 'wrap',
         gap: '8px',
-        fontSize: '12px',
+        fontSize: T.font.caption,
         lineHeight: '18px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
       attemptText: {
         fontFamily: FONT_MONO,
-        fontSize: '11.5px',
+        fontSize: T.font.caption,
         color: 'var(--dsw-alias-label-primary, #1a1a1a)',
         wordBreak: 'break-word',
       },
@@ -511,7 +542,7 @@ window.__ModuleLoader__.load({
         alignItems: 'baseline',
         justifyContent: 'space-between',
         gap: '8px',
-        fontSize: '12px',
+        fontSize: T.font.caption,
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
       timelineTrack: {
@@ -519,7 +550,7 @@ window.__ModuleLoader__.load({
         alignItems: 'stretch',
         gap: '2px',
         height: '10px',
-        borderRadius: '999px',
+        borderRadius: T.radius.pill,
         overflow: 'hidden',
       },
       timelineSeg: {
@@ -534,7 +565,7 @@ window.__ModuleLoader__.load({
       sourceBar: {
         display: 'flex',
         height: '8px',
-        borderRadius: '999px',
+        borderRadius: T.radius.pill,
         overflow: 'hidden',
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.10))',
       },
@@ -545,8 +576,8 @@ window.__ModuleLoader__.load({
         alignItems: 'center',
         gap: '4px 14px',
         marginTop: '7px',
-        fontSize: '11.5px',
-        lineHeight: '17px',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
       /* Each family is a chip that opens its kinds; collapsed by default so the
@@ -557,13 +588,13 @@ window.__ModuleLoader__.load({
         gap: '5px',
         whiteSpace: 'nowrap',
         padding: '2px 7px',
-        borderRadius: '999px',
-        border: '1px solid var(--dsw-alias-border-l1, #e3e6ea)',
+        borderRadius: T.radius.sm,
+        border: T.hair,
         background: 'transparent',
         color: 'inherit',
         font: 'inherit',
         cursor: 'pointer',
-        lineHeight: '17px',
+        lineHeight: '18px',
       },
       sourceDetailRow: {
         display: 'flex',
@@ -571,9 +602,9 @@ window.__ModuleLoader__.load({
         gap: '4px 12px',
         marginTop: '6px',
         paddingTop: '6px',
-        borderTop: '1px dashed var(--dsw-alias-border-l1, #e3e6ea)',
-        fontSize: '11.5px',
-        lineHeight: '17px',
+        borderTop: T.hairDashed,
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
       sourceDetail: { display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' },
@@ -592,16 +623,16 @@ window.__ModuleLoader__.load({
         overscrollBehavior: 'contain',
         padding: '12px 16px 16px',
         fontFamily: FONT_MONO,
-        fontSize: '12px',
-        lineHeight: '20px',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         tabSize: 2,
       },
       dialogFoot: {
         flex: '0 0 auto',
         padding: '8px 16px 10px',
-        borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.25))',
-        fontSize: '11.5px',
-        lineHeight: '17px',
+        borderTop: T.hair,
+        fontSize: T.font.caption,
+        lineHeight: '18px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
       },
 
@@ -611,7 +642,7 @@ window.__ModuleLoader__.load({
       jsonClickable: { cursor: 'pointer' },
       jsonNode: { display: 'block' },
       jsonGuide: {
-        borderLeft: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))',
+        borderLeft: T.hair,
         marginLeft: '6px',
         paddingLeft: '10px',
       },
@@ -638,9 +669,9 @@ window.__ModuleLoader__.load({
         alignItems: 'center',
         margin: '5px 0 4px',
         paddingTop: '5px',
-        borderTop: '1px dashed var(--dsw-alias-border-l2)',
+        borderTop: T.hairDashed,
         fontFamily: FONT_MONO,
-        fontSize: '10.5px',
+        fontSize: T.font.micro,
         letterSpacing: '0.02em',
         whiteSpace: 'nowrap',
         overflow: 'hidden',
@@ -651,22 +682,22 @@ window.__ModuleLoader__.load({
         marginLeft: '8px',
         padding: '0 6px',
         border: '1px solid transparent',
-        borderRadius: '999px',
-        fontSize: '11.5px',
+        borderRadius: T.radius.pill,
+        fontSize: T.font.caption,
         lineHeight: '16px',
         fontVariantNumeric: 'tabular-nums',
       },
       jsonBadgeMuted: {
         display: 'inline-block',
         marginLeft: '6px',
-        fontSize: '11.5px',
+        fontSize: T.font.caption,
         fontVariantNumeric: 'tabular-nums',
       },
       /* Folded history header: reads as a label, never as a JSON element. */
       jsonFoldedHead: {
         margin: '3px 0',
         padding: '2px 6px',
-        borderRadius: '4px',
+        borderRadius: T.radius.xs,
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.07))',
       },
       /* "→ 对话" jump affordance on one message row. Hidden until the row is
@@ -676,7 +707,7 @@ window.__ModuleLoader__.load({
       /* The one row the dialog was opened from: a soft accent band that fades,
          so "this is the message you clicked" reads at a glance. */
       jsonFocus: {
-        borderRadius: '4px',
+        borderRadius: T.radius.xs,
         outline: '2px solid var(--dsw-alias-brand-primary, #2f6fed)',
         outlineOffset: '1px',
       },
@@ -688,9 +719,9 @@ window.__ModuleLoader__.load({
         marginLeft: '6px',
         padding: '0 5px',
         border: '1px solid transparent',
-        borderRadius: '4px',
-        fontSize: '11px',
-        lineHeight: '15px',
+        borderRadius: T.radius.xs,
+        fontSize: T.font.micro,
+        lineHeight: '16px',
         fontVariantNumeric: 'tabular-nums',
         verticalAlign: 'middle',
         cursor: 'pointer',
@@ -699,10 +730,10 @@ window.__ModuleLoader__.load({
       jsonToolBody: {
         marginLeft: '6px',
         paddingLeft: '10px',
-        borderLeft: '1px dashed var(--dsw-alias-border-l1, rgba(127,127,127,0.35))',
+        borderLeft: T.hairDashed,
       },
       jsonToolLabel: {
-        fontSize: '11px',
+        fontSize: T.font.micro,
         lineHeight: '16px',
         textTransform: 'uppercase',
         letterSpacing: '0.04em',
@@ -728,7 +759,7 @@ window.__ModuleLoader__.load({
         padding: '8px',
         overflowY: 'auto',
         overscrollBehavior: 'contain',
-        borderRight: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.25))',
+        borderRight: T.hair,
         background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.04))',
       },
       stepRow: {
@@ -739,7 +770,7 @@ window.__ModuleLoader__.load({
         gap: '1px',
         textAlign: 'left',
         padding: '5px 8px',
-        borderRadius: '6px',
+        borderRadius: T.radius.sm,
         border: '0',
         borderLeft: '2px solid transparent',
         background: 'transparent',
@@ -750,7 +781,7 @@ window.__ModuleLoader__.load({
       stepRowActive: {
         background: 'var(--dsw-alias-bg-overlay, #ffffff)',
         borderLeft: '2px solid var(--dsw-alias-brand-primary, #2f6fed)',
-        boxShadow: 'inset 0 0 0 1px var(--dsw-alias-border-l1, rgba(127,127,127,0.25))',
+        boxShadow: 'inset 0 0 0 0.5px var(--dsw-alias-border-l4, var(--dsw-alias-border-l1, rgba(127,127,127,0.25)))',
       },
       stepRowTop: {
         display: 'flex',
@@ -759,20 +790,20 @@ window.__ModuleLoader__.load({
         gap: '8px',
       },
       stepNo: {
-        fontSize: '12.5px',
+        fontSize: T.font.control,
         lineHeight: '18px',
         fontWeight: 600,
         fontVariantNumeric: 'tabular-nums',
       },
       stepAside: {
-        fontSize: '11.5px',
+        fontSize: T.font.caption,
         lineHeight: '16px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
         fontVariantNumeric: 'tabular-nums',
         whiteSpace: 'nowrap',
       },
       stepSub: {
-        fontSize: '11.5px',
+        fontSize: T.font.caption,
         lineHeight: '16px',
         color: 'var(--dsw-alias-label-secondary, #5b6472)',
         fontVariantNumeric: 'tabular-nums',
@@ -2478,49 +2509,59 @@ window.__ModuleLoader__.load({
       '.dsh-pl-btn:hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
       'border-color:var(--dsw-alias-border-l2,rgba(127,127,127,.5))}',
       '.dsh-pl-btn:active{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
-      '.dsh-pl-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      '.dsh-pl-btn:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ',
+      'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#2f6fed));outline-offset:2px}',
       '.dsh-pl-step:not(.dsh-pl-step-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
-      '.dsh-pl-step:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:-2px}',
+      '.dsh-pl-step:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ',
+      'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#2f6fed));outline-offset:-2px}',
       /* The 请求 / 响应 pair inside a step row: only the half that is not already
          selected needs a hover affordance. */
       '.dsh-pl-side:not(.dsh-pl-side-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f);',
       'color:var(--dsw-alias-label-primary,#111827)}',
-      '.dsh-pl-side:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
+      '.dsh-pl-side:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ',
+      'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#2f6fed));outline-offset:2px}',
       /* A side with nothing behind it (the call never got a reply) reads as muted. */
       '.dsh-pl-side-off{opacity:.55}',
       /* The card/row body is itself a button; it must not paint its own frame. */
-      '.dsh-pl-stephit:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:2px;border-radius:6px}',
+      '.dsh-pl-stephit:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ',
+      'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#2f6fed));',
+      'outline-offset:2px;border-radius:var(--dsw-radius-sm,8px)}',
       /* The source legend's family chips are navigation pills, not list rows:
          they borrow the hover rules but must not be counted as step-list rows. */
-      '.dsh-pl-pill{border-radius:999px}',
+      '.dsh-pl-pill{border-radius:var(--dsw-radius-sm,8px)}',
       '.dsh-pl-pill:not(.dsh-pl-pill-on):hover{background:var(--dsw-alias-interactive-bg-hover,#2631480f)}',
-      '.dsh-pl-pill:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6fed);outline-offset:1px}',
-      /* A 100k-line payload needs a real scrollbar: the shell’s default overlay bar
-         is thin and fades out, which makes dragging to the end a guessing game.
-         Colours come from the dialog’s own palette through custom properties (see
-         PALETTES), so the rail can never blend into the surface it sits on. */
-      '.dsh-pl-scroll{scrollbar-gutter:stable;scrollbar-width:auto;',
-      'scrollbar-color:var(--dsh-pl-sb-thumb,rgba(15,23,42,.46)) var(--dsh-pl-sb-track,rgba(15,23,42,.07))}',
-      '.dsh-pl-scroll::-webkit-scrollbar{width:14px;height:14px}',
-      '.dsh-pl-scroll::-webkit-scrollbar-track{',
-      'background:var(--dsh-pl-sb-track,rgba(15,23,42,.07));',
-      'border-left:1px solid var(--dsw-alias-border-l1,rgba(15,23,42,.14))}',
+      '.dsh-pl-pill:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ',
+      'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#2f6fed));outline-offset:2px}',
+      /* A 100k-line payload needs a scrollbar that never fades out, but it should
+         not look like a 2005 IDE either: 10px, no painted track, a neutral thumb
+         that only darkens on hover. Colours come from the dialog's own palette
+         through custom properties (see PALETTES), never from a raw hex. */
+      '.dsh-pl-scroll{scrollbar-gutter:stable;scrollbar-width:thin;',
+      'scrollbar-color:var(--dsh-pl-sb-thumb,rgba(127,127,127,.30)) transparent}',
+      '.dsh-pl-scroll::-webkit-scrollbar{width:10px;height:10px}',
+      '.dsh-pl-scroll::-webkit-scrollbar-track{background:transparent}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb{',
-      'border:2px solid transparent;background-clip:padding-box;border-radius:8px;',
-      'background-color:var(--dsh-pl-sb-thumb,rgba(15,23,42,.46));',
+      'border:2px solid transparent;background-clip:padding-box;border-radius:var(--dsw-radius-sm,8px);',
+      'background-color:var(--dsh-pl-sb-thumb,rgba(127,127,127,.30));',
       'transition:background-color .12s ease}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb:hover{',
-      'background-color:var(--dsh-pl-sb-thumb-hover,rgba(15,23,42,.68));',
+      'background-color:var(--dsh-pl-sb-thumb-hover,rgba(127,127,127,.46));',
       'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb:active{',
-      'background-color:var(--dsh-pl-sb-thumb-active,#2f6fed);',
+      'background-color:var(--dsh-pl-sb-thumb-active,rgba(127,127,127,.34));',
       'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
+      /* The shipped surfaces drop their transitions when the OS asks for it. */
+      '@media (prefers-reduced-motion:reduce){',
+      '.dsh-pl-scroll::-webkit-scrollbar-thumb,.dsh-pl-action,.dsh-pl-btn,.dsh-pl-pill,',
+      '.dsh-pl-side,.dsh-pl-step,.dsh-pl-jump{transition:none}',
+      '.dsh-pl-tip{animation:none}}',
       /* Jump-to-conversation chip: always in flow, so a row never shifts on hover. */
-      '.dsh-pl-jump{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:0 6px;',
-      'height:18px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.35));',
-      'border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.6));',
-      'color:var(--dsw-alias-label-secondary,#5b6472);font-family:inherit;font-size:11px;',
+      '.dsh-pl-jump{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:0 8px;',
+      'height:20px;box-sizing:border-box;',
+      'border:0.5px solid var(--dsw-alias-border-l4,var(--dsw-alias-border-l1,rgba(127,127,127,.35)));',
+      'border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.6));',
+      'color:var(--dsw-alias-label-secondary,#5b6472);font-family:inherit;font-size:12px;',
       'line-height:16px;cursor:pointer;vertical-align:middle}',
       '.dsh-pl-jump:hover{color:var(--dsw-alias-brand-primary,#2f6fed);',
       'border-color:var(--dsw-alias-brand-primary,#2f6fed)}',
@@ -2565,10 +2606,10 @@ window.__ModuleLoader__.load({
         toggle: '#8250df',
         /* Scrollbar: alpha over the pane background, so contrast never depends on
            which alias token happens to be near the surface colour. */
-        scTrack: 'rgba(15,23,42,0.07)',
-        scThumb: 'rgba(15,23,42,0.46)',
-        scThumbHover: 'rgba(15,23,42,0.68)',
-        scThumbActive: '#2f6fed',
+        scTrack: 'transparent',
+        scThumb: 'rgba(15,23,42,0.30)',
+        scThumbHover: 'rgba(15,23,42,0.46)',
+        scThumbActive: 'rgba(15,23,42,0.34)',
         /* Accent for messages produced in the turn being inspected, so the eye
            finds them without reading a single role name. */
         currentBorder: '#2f6fed',
@@ -2600,10 +2641,10 @@ window.__ModuleLoader__.load({
         nil: '#8b949e',
         punct: '#6e7681',
         toggle: '#d2a8ff',
-        scTrack: 'rgba(255,255,255,0.10)',
-        scThumb: 'rgba(255,255,255,0.42)',
-        scThumbHover: 'rgba(255,255,255,0.66)',
-        scThumbActive: '#5a8cff',
+        scTrack: 'transparent',
+        scThumb: 'rgba(255,255,255,0.28)',
+        scThumbHover: 'rgba(255,255,255,0.44)',
+        scThumbActive: 'rgba(255,255,255,0.32)',
         currentBorder: '#5a8cff',
         currentBg: 'rgba(90,140,255,0.13)',
         freshBorder: '#3fb950',
@@ -2763,7 +2804,7 @@ window.__ModuleLoader__.load({
         h('span', { key: 'n', style: { color: pal.punct } }, ' (' + items.length + ')'),
         open
           ? null
-          : h('span', { key: 'f', style: { marginLeft: '6px', color: pal.nil, fontSize: '11.5px' } }, TEXT.folded),
+          : h('span', { key: 'f', style: { marginLeft: '6px', color: pal.nil, fontSize: T.font.caption } }, TEXT.folded),
       );
 
       if (!open) return head;

@@ -69,13 +69,19 @@
 
 ## 字体与视觉尺寸
 
-`Theme.listTokens` 只有颜色 token，没有任何字体/行高 token，所以排版不引用变量，靠几条纪律和 GUI 对齐：
+`Theme.listTokens` 只有颜色 token，没有任何字体/行高 token，所以排版不引用变量，靠一张手写的 `T` 表（`client.js` 里 `STYLE` 之前）统一收口。**改观感只改 `T`，不要在 `STYLE` 里再写字面值**，否则又会漂回 10.5 / 11.5 / 12.5 这种半像素档。
 
 - **字体继承 `inherit`**：只有 payload 正文换成等宽栈（`ui-monospace, SFMono-Regular, …`），标题、chips、按钮全部跟随应用字体——自带一套字体栈就会立刻显得“不是同一个软件”。
-- **四级字号 + 统一 20px 行高**：14 标题 / 13 控件（卡片、step 列表）/ 12 正文（chips、按钮、等宽 payload）/ 11.5 微标签（`step 3 · 12 条消息`）。控件高度 28–30px、圆角 8px（弹框 12px），和官方按钮、气泡的尺度一致。
+- **四级字号（`T.font`）**：14 正文 / 13 控件 / 12 说明 / 11 微标签，行高 22 / 18 / 18 / 16。**不要用半像素字号**（10.5 / 11.5 / 12.5）：小数 DPR 下会发糊，也和官方的 13 / 14 两档不成梯队——第一版正是这样写的，于是“看着不搭”。
+- **圆角只用语义级（`T.radius`）**：`radius-sm` 8（按钮、chips、step 行）/ `radius-lg` 12 / `radius-panel` 16（弹框）/ 999 胶囊（进度条、计数徽标）/ 4px（`xs`，只给仪表里的分段）。原来 2 / 4 / 6 / 8 / 12 / 999 六档混用，是“碎”的主因。
+- **边框用发丝线（`T.hair`）**：官方 chip 与 textarea 都是 `0.5px solid var(--dsw-alias-border-l4)`；写 `1px + border-l1` 会把每个控件都压成“灰掉”的样子。`T.hair` 对 `l4` 做了嵌套兜底（老主题只发布 `l1`）。
+- **焦点环走 token（`T.focus`）**：`--dsw-focus-ring-width` / `--dsw-focus-ring-color`，兜底 `state-business-primary`；别再硬编码 `2px solid brand-primary`。
 - **数字用 `tabular-nums`**：token 数、消息条数、`#k / N` 在切换时不会跳动。
-- **悬停/焦点靠注入的 CSS**：`.dsh-pl-btn` / `.dsh-pl-tab` / `.dsh-pl-step` 三个类补上 `:hover`、`:focus-visible` 和应用的 150ms 过渡。
+- **悬停/焦点靠注入的 CSS**：`.dsh-pl-btn` / `.dsh-pl-step` / `.dsh-pl-side` / `.dsh-pl-pill` 补 `:hover`、`:focus-visible`，并在 `prefers-reduced-motion` 下关掉过渡与气泡动画。
+- **滚动条**：10px 宽、不画轨道、中性 thumb（激活态不发蓝）。理由是 100k 行 payload 需要能拖的常显滚动条，而官方 overlay 条太细会让人“盲拖”；但不该因此长成 IDE 的样子。
 - **触发器照抄官方动作按钮**：`28×28`、`radius-sm`、`padding 6px`、`svg 15×15`、静止 `label-tertiary`、hover `interactive-bg-hover`；气泡用 `alias-tooltip-bg` + `static-neutral-bluish-00`（黑底白字）、`13px/20px`、`3px 7px`、`radius-sm`，在**下方**弹出（和同一排的“复制 / 好的回答”一致），空间不足时才翻到上方。
+
+**还没做的**（按影响排序）：`role="dialog"` / `aria-modal` / 焦点陷阱 / portal 到 `body`、`88vh × 1040px` 的“应用窗口”尺寸收敛、阴影 token 化、JSON 语法色改走官方 shiki 高亮。
 
 ## 内部结构
 
