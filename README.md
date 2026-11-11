@@ -114,7 +114,7 @@ git clone https://github.com/shengpj/dsh-payload.git
 ## 限制
 
 - 只支持 DSH 的图形界面客户端（纯客户端插件，没有 Host 半边的服务注册）；TUI/CLI 下没有入口。
-- 首次打开某个 Turn 时需要把会话窗口往前翻完（`loadOlder()`）；这一步走的是 DSH 的会话快照，翻页次数和会话长度成正比，同一 Turn 的结果会缓存，再开很快。重建本身只折叠一次窗口（不再每一步重扫全量事件），170 次调用的 Turn 在 Node 里约 100 ms。
+- 首次打开某个 Turn 时需要把会话窗口往前读完整（一次请求携带的是整段对话，读一半会静默丢消息）。这一步走 DSH 的会话快照：优先用 `loadThrough(0)` 一次跳到最旧一页（Host 私下翻页、只在结束时 publish 一次，约 200 条一页），拿不到这个能力时才退回 `loadOlder()` 逐页翻。重建结果按「Turn 自己的 seq 区间」缓存，已结束的 Turn 不会再因为会话继续增长而失效，容量 40 条按最近使用淘汰。重建本身只折叠一次窗口（不再每一步重扫全量事件），6 600 条消息的 Turn 在 Node 里约 170 ms；首次读取的耗时主要在翻页往返上，所以加载态会实时显示已经读了多少秒。
 - provider 没上报 `usage` 的调用会显示「未记录到用量」，其余部分照常展示。
 - 已定稿的 assistant 消息才有操作行，正在流式输出的那条没有。
 
@@ -128,6 +128,7 @@ client.js                    全部实现：注册 + 重建 + 弹框 + 折叠树
 cordis.patch.yml             装进 profile 时插入的条目
 tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每条消息→调用的映射与本轮/历史切分
 tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 15 个场景（含错误边界、工具卡片、响应侧、每步的请求/响应成对切换）
+tools/paging-smoke.cjs             无浏览器分页冒烟：用假 binding 验证「一次跳跃代替逐页发布」及三种退回路径
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -141,6 +142,7 @@ market/index.json                  插件市场索引（format 1）
 node tools/verify-against-session.cjs             # 数据：自动取最新的会话日志
 node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
 node tools/render-smoke.cjs                       # 渲染：15 个场景
+node tools/paging-smoke.cjs                       # 分页：跳跃 / 退回路径
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 

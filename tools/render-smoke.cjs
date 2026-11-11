@@ -432,6 +432,17 @@ internals.publishDialog({ status: 'error', title: '本轮发送给模型的完�
 const failed = walk(overlay({}));
 expect(failed.text.join(' ').includes('sessions service unavailable'), 'error state did not surface the message');
 
+/* Reading a long session's history takes seconds and has no partial result, so
+   the only honest progress signal is elapsed time; a still line reads as a hang. */
+internals.publishDialog({
+  status: 'loading',
+  title: '本轮发送给模型的完整请求',
+  note: '正在读取整段会话历史 3.4 秒…（长对话第一次打开要把全部历史读进浏览器）',
+});
+const reading = walk(overlay({}));
+expect(reading.text.join(' ').includes('3.4'), 'loading state did not report the elapsed seconds');
+expect(!reading.text.join(' ').includes('正在读取本轮请求'), 'the plain line won over the counted one');
+
 internals.publishDialog(null);
 
 /* h) a request that knows where its Turn begins: the older messages fold into

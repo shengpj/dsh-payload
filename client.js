@@ -34,6 +34,10 @@ window.__ModuleLoader__.load({
           copy: '复制',
           copied: '已复制',
           loading: '正在读取本轮请求…',
+          readingHistory: (seconds) =>
+            '正在读取整段会话历史 ' +
+            seconds +
+            ' 秒…（长对话第一次打开要把全部历史读进浏览器，同一个会话之后再打开会复用）',
           empty: '这一轮没有记录到模型调用。',
           error: '读取失败：',
           title: '本轮这次调用的请求与回复',
@@ -156,6 +160,10 @@ window.__ModuleLoader__.load({
           copy: 'Copy',
           copied: 'Copied',
           loading: 'Reading this turn’s request…',
+          readingHistory: (seconds) =>
+            'Reading the whole session history — ' +
+            seconds +
+            's… (a long conversation is read in full the first time; later opens reuse it)',
           empty: 'No model call recorded for this turn.',
           error: 'Read failed: ',
           title: 'Request and reply for this call',
@@ -961,6 +969,35 @@ window.__ModuleLoader__.load({
           i += 1;
         } else bytes += 3;
       }
+      return bytes;
+    }
+
+    /*
+     * Size of a whole body (one rebuilt request, one reply), computed at most
+     * once per object.
+     *
+     * The chips that show it are rebuilt on EVERY render of the dialog — a step
+     * switch, a 请求|响应 switch, a fold, a copied-flash all re-run them — and the
+     * body is megabytes: measuring it took ~40 ms per render on a 6 500-message
+     * request, which is visible as lag on every click, not just on open. The
+     * built calls are cached (`builtCache`), so their request objects survive and
+     * the number is measured once per call for the life of the tab.
+     */
+    const BODY_BYTES = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+    function bytesOfBody(value) {
+      if (!value || typeof value !== 'object') return 0;
+      if (BODY_BYTES) {
+        const cached = BODY_BYTES.get(value);
+        if (cached !== undefined) return cached;
+      }
+      let bytes = 0;
+      try {
+        bytes = byteLength(value);
+      } catch (error) {
+        bytes = 0;
+      }
+      if (BODY_BYTES) BODY_BYTES.set(value, bytes);
       return bytes;
     }
 
@@ -2352,6 +2389,102 @@ window.__ModuleLoader__.load({
       return describeMessage(message);
     }
 
+    /**
+     * The seq span a Turn occupies: `[start, end]`, with `end` the Turn's own end
+     * marker or the seq just before the next Turn starts.
+     *
+     * Used as the cache key, because a Turn's requests can only be built from the
+     * events inside that span (plus the headers before it). Keying on the whole
+     * window's last seq instead meant every new event anywhere in the session
+     * invalidated every cached Turn: in a 93-Turn session the rebuild cache was
+     * cold every single time, so re-opening a Turn you just looked at re-walked
+     * and re-folded the entire conversation.
+     */
+    function turnBounds(events, turnNumber) {
+      let start = -1;
+      let end = -1;
+      for (let i = 0; i < events.length; i += 1) {
+        const event = events[i];
+        if (typeOf(event) !== 'turn/start') continue;
+        if (dataOf(event).turn !== turnNumber) continue;
+        start = seqOf(event);
+        break;
+      }
+      if (start < 0) return null;
+      for (let i = 0; i < events.length; i += 1) {
+        const event = events[i];
+        const seq = seqOf(event);
+        if (seq <= start) continue;
+        const type = typeOf(event);
+        if (type === 'turn/end' && dataOf(event).turn === turnNumber) {
+          end = seq;
+          break;
+        }
+        if (type === 'turn/start') {
+          end = seq - 1;
+          break;
+        }
+      }
+      return { start: start, end: end };
+    }
+
+    /**
+     * Page the whole Client event window in, then flatten it to records.
+     *
+     * Takes `binding` (`{ session, eventSource }`) rather than a session id, so a
+     * Node test can drive real paging shapes without a live Host.
+     *
+     * Two verbs exist for walking backwards:
+     *   `loadOlder()`    — one Host-selected page, published immediately.
+     *   `loadThrough(n)` — a jump: keeps paging privately, uses larger pages, and
+     *                      publishes ONE ordered prepend once the window covers
+     *                      seq n (repeats share one in-flight jump).
+     *
+     * The reader is waiting for a dialog, not for the transcript, so the jump is
+     * the right verb: target 0 means "the whole conversation", which turns a
+     * 40-page publish storm — 40 re-renders of the conversation behind the dialog —
+     * into a single update. `loadOlder()` stays as the completion pass and as the
+     * fallback for a jump that gave up on a page with no progress.
+     */
+    async function loadFullWindow(binding) {
+      if (!binding) throw new Error('session is not bound');
+      const session = binding.session;
+      const source = binding.eventSource;
+      const snapshotOf = () =>
+        source && typeof source.getSnapshot === 'function' ? source.getSnapshot() : null;
+      const entriesOf = (snapshot) => (snapshot && Array.isArray(snapshot.entries) ? snapshot.entries : []);
+
+      let snapshot = snapshotOf();
+
+      if (snapshot && snapshot.hasMore === true && session && typeof session.loadThrough === 'function') {
+        try {
+          await session.loadThrough(0);
+        } catch (error) {
+          /* A failed or refused jump keeps whatever it already published; the loop
+             below finishes the walk instead of failing the whole open. */
+        }
+        snapshot = snapshotOf() || snapshot;
+      }
+
+      let guard = 0;
+      while (
+        snapshot &&
+        snapshot.hasMore === true &&
+        guard < 200 &&
+        session &&
+        typeof session.loadOlder === 'function'
+      ) {
+        guard += 1;
+        const before = entriesOf(snapshot).length;
+        await session.loadOlder();
+        snapshot = snapshotOf();
+        if (!snapshot) break;
+        if (entriesOf(snapshot).length <= before) break;
+      }
+
+      return collectEvents(entriesOf(snapshot));
+    }
+
     /** Locate the assistant message an action row belongs to. */
     function locateMessage(events, messageId) {
       for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -2385,6 +2518,8 @@ window.__ModuleLoader__.load({
         summarizeSources: summarizeSources,
         byteLength: byteLength,
         locateMessage: locateMessage,
+        loadFullWindow: loadFullWindow,
+        turnBounds: turnBounds,
         callIndexForStep: callIndexForStep,
         describeMessage: describeMessage,
         DialogBody: DialogBody,
@@ -2415,8 +2550,10 @@ window.__ModuleLoader__.load({
      */
     let dialogPayload = null;
     let dialogSerial = 0;
+    /* Identifies one open attempt, so a read that lands after the user closed the
+       dialog (or opened a different message) cannot republish itself. */
+    let dialogToken = 0;
     const dialogListeners = new Set();
-
     function publishDialog(next) {
       dialogPayload = next ? Object.assign({ id: (dialogSerial += 1) }, next) : null;
       dialogListeners.forEach(function (listener) {
@@ -2473,10 +2610,24 @@ window.__ModuleLoader__.load({
     const builtCache = new Map();
     const BUILT_CACHE_LIMIT = 40;
 
-    /** Cache a rebuild, keyed so a Turn that is still growing cannot serve stale calls. */
+    /*
+     * Cache a rebuild, keyed so a Turn that is still growing cannot serve stale
+     * calls.
+     *
+     * Eviction is least-recently-used, not "clear all 40". A rebuilt Turn holds
+     * every message of the conversation, so a wipe is a real re-read of the whole
+     * window; flipping between two Turns in a long session used to be able to
+     * throw away everything and rebuild from scratch. Re-inserting refreshes
+     * recency, so a Turn opened twice in a row stays warm.
+     */
     function rememberBuilt(key, built) {
-      if (builtCache.size >= BUILT_CACHE_LIMIT) builtCache.clear();
+      if (builtCache.has(key)) builtCache.delete(key);
       builtCache.set(key, built);
+      while (builtCache.size > BUILT_CACHE_LIMIT) {
+        const oldest = builtCache.keys().next();
+        if (oldest.done) break;
+        builtCache.delete(oldest.value);
+      }
     }
 
     /* The trigger copies the shipped per-message action buttons exactly — 28px hit
@@ -3712,13 +3863,7 @@ window.__ModuleLoader__.load({
         );
       if (typeof meta.tools === 'number') metaChips.push(chip('tools', null, meta.tools + ' ' + TEXT.tools));
       if (meta.reason) metaChips.push(chip('reason', TEXT.reasonLabel, meta.reason));
-      const bodyBytes = (() => {
-        try {
-          return JSON.stringify(call ? call.request : '').length;
-        } catch (err) {
-          return 0;
-        }
-      })();
+      const bodyBytes = call ? bytesOfBody(call.request) : 0;
       if (bodyBytes > 0)
         metaChips.push(chip('bytes', TEXT.bytesLabel, formatBytes(bodyBytes), false, TEXT.bytesTitle));
 
@@ -3817,12 +3962,7 @@ window.__ModuleLoader__.load({
             ),
           );
         }
-        let responseBytes = 0;
-        try {
-          responseBytes = response.body ? JSON.stringify(response.body).length : 0;
-        } catch (err) {
-          responseBytes = 0;
-        }
+        const responseBytes = response.body ? bytesOfBody(response.body) : 0;
         if (responseBytes > 0) {
           respChips.push(
             chip('rbytes', TEXT.responseBytesLabel, formatBytes(responseBytes), false, TEXT.responseShapeTitle),
@@ -4180,7 +4320,10 @@ window.__ModuleLoader__.load({
           document.addEventListener('keydown', onKeyDown);
           return () => document.removeEventListener('keydown', onKeyDown);
         },
-        [payload ? payload.id : 0],
+        /* Keyed on "a dialog is open", not on its id: the loading dialog
+           republishes every 250 ms to count the seconds, and rebinding the
+           listener on each tick is pure churn. */
+        [payload ? 1 : 0],
       );
 
       if (!payload) return null;
@@ -4189,8 +4332,16 @@ window.__ModuleLoader__.load({
       if (payload.status === 'ready' && payload.data) {
         inner = h(DialogBody, { key: payload.id, payload });
       } else {
-        const message =
-          payload.status === 'error' ? TEXT.error + payload.message : payload.status === 'empty' ? TEXT.empty : TEXT.loading;
+        /* `note` is the load in progress, counted in seconds: the reader said
+           "first open of a long conversation hangs", and a still line cannot be
+           told apart from a hang. */
+        const message = payload.note
+          ? payload.note
+          : payload.status === 'error'
+            ? TEXT.error + payload.message
+            : payload.status === 'empty'
+              ? TEXT.empty
+              : TEXT.loading;
         inner = h(
           'div',
           { style: Object.assign({}, STYLE.dialog, { height: 'auto', maxHeight: '40vh' }), onClick: (event) => event.stopPropagation() },
@@ -4290,43 +4441,27 @@ window.__ModuleLoader__.load({
         };
 
         /**
-         * Load the whole Client event window for one session, walking older pages
-         * until nothing older remains.
+         * Load the whole Client event window for one bound session.
          *
          * The prefix matters: a request carries the ENTIRE conversation so far, so
          * rebuilding one call from a partial window would silently drop messages.
          * A full walk also guarantees the Turn boundaries (`turn/start`) are
          * present before `buildTurnCalls` runs.
+         *
+         * HOW the walk happens matters just as much, and it is the whole reason the
+         * first open of a long conversation felt slow. A page holds about two Turns
+         * (the Host stops at the first Turn start past ~50 messages), so a long
+         * session is 40+ pages; `loadOlder()` publishes every single page, which
+         * re-renders the transcript 40+ times while the user waits, and a plain
+         * loop awaits each round trip in turn. That work happened in `loadFullWindow`
+         * below — see its comment for the jump loader that replaces it.
          */
         const readWindow = async (sessionId) => {
           const sessions = sessionsOf();
           if (!sessions || typeof sessions.binding !== 'function') throw new Error('sessions service unavailable');
           const binding = sessions.binding(sessionId);
           if (!binding) throw new Error('session is not bound');
-          const session = binding.session;
-          const source = binding.eventSource;
-
-          const snapshotOf = () =>
-            source && typeof source.getSnapshot === 'function' ? source.getSnapshot() : null;
-          const entriesOf = (snapshot) => (snapshot && Array.isArray(snapshot.entries) ? snapshot.entries : []);
-
-          let snapshot = snapshotOf();
-          let guard = 0;
-          while (
-            snapshot &&
-            snapshot.hasMore === true &&
-            guard < 200 &&
-            session &&
-            typeof session.loadOlder === 'function'
-          ) {
-            guard += 1;
-            const before = entriesOf(snapshot).length;
-            await session.loadOlder();
-            snapshot = snapshotOf();
-            if (!snapshot) break;
-            if (entriesOf(snapshot).length <= before) break;
-          }
-          return collectEvents(entriesOf(snapshot));
+          return loadFullWindow(binding);
         };
 
         /**
@@ -4342,18 +4477,34 @@ window.__ModuleLoader__.load({
             const spot = locateMessage(events, messageId);
             if (!spot) return { status: 'empty' };
 
+            /* Key on the Turn's own span plus the window's first seq (a header
+               that only becomes visible when older pages arrive can change a
+               rebuild). A closed Turn is immutable, so its entry stays valid
+               while the rest of the session keeps growing. */
             let lastSeq = 0;
+            let firstSeq = 0;
             for (let i = 0; i < events.length; i += 1) {
               const seq = seqOf(events[i]);
               if (seq > lastSeq) lastSeq = seq;
+              if (i === 0) firstSeq = seq;
             }
+            const bounds = turnBounds(events, spot.turn);
+            const spanEnd = bounds && bounds.end >= 0 ? bounds.end : lastSeq;
             const cacheKey =
-              String(sessionId) + ':' + String(spot.turn) + ':' + String(lastSeq);
+              String(sessionId) +
+              ':' +
+              String(spot.turn) +
+              ':' +
+              String(spanEnd) +
+              ':' +
+              String(firstSeq);
             let built = builtCache.get(cacheKey);
             if (!built) {
               built = buildTurnCalls(events, spot.turn);
-              if (built) rememberBuilt(cacheKey, built);
             }
+            /* Re-insert on a hit too: that is what makes the eviction order the
+               reuse order, so the Turn being read right now is the last to go. */
+            if (built) rememberBuilt(cacheKey, built);
             if (!built || !Array.isArray(built.calls) || !built.calls.length) return { status: 'empty' };
 
             return {
@@ -4418,17 +4569,62 @@ window.__ModuleLoader__.load({
           const openDialog = () => {
             hideTip();
             const scheme = readScheme();
-            publishDialog({ status: 'loading', title: TEXT.title, scheme: scheme });
-            buildTurnForMessage(sessionId, messageId).then(function (result) {
-              const built = result.status === 'ready' && result.data ? result.data : null;
-              const title = built
-                ? TEXT.title +
-                  ' · Turn ' +
-                  built.turn +
-                  (typeof result.step === 'number' ? ' · step ' + result.step : '')
-                : TEXT.title;
-              publishDialog(Object.assign({ title: title, scheme: scheme }, result));
-            });
+            const token = (dialogToken += 1);
+            /* Nothing here is incremental — one request carries the whole
+               conversation, so the read is all-or-nothing — which means the only
+               honest progress signal is elapsed time. A still line reads as a
+               hang, and this is exactly what makes a writer think the button is
+               broken. */
+            const showLoading = (note) =>
+              publishDialog({ status: 'loading', title: TEXT.title, scheme: scheme, note: note, token: token });
+            showLoading(null);
+            const startedAt = Date.now();
+            const ticker =
+              typeof setInterval === 'function'
+                ? setInterval(() => {
+                    const elapsed = Date.now() - startedAt;
+                    /* A cached re-open lands in tens of ms; do not flash "0.0s". */
+                    if (elapsed < 400) return;
+                    /* A read that never settles must not tick for ever. */
+                    if (elapsed > 180000) {
+                      clearInterval(ticker);
+                      return;
+                    }
+                    showLoading(TEXT.readingHistory((elapsed / 1000).toFixed(1)));
+                  }, 250)
+                : null;
+            const stopTicker = () => {
+              if (ticker !== null && typeof clearInterval === 'function') clearInterval(ticker);
+            };
+            const stillMine = () => Boolean(dialogPayload) && dialogPayload.token === token;
+
+            buildTurnForMessage(sessionId, messageId).then(
+              function (result) {
+                stopTicker();
+                /* Closed or replaced while reading: a late result must not pop the
+                   dialog back open. */
+                if (!stillMine()) return;
+                const built = result.status === 'ready' && result.data ? result.data : null;
+                const title = built
+                  ? TEXT.title +
+                    ' · Turn ' +
+                    built.turn +
+                    (typeof result.step === 'number' ? ' · step ' + result.step : '')
+                  : TEXT.title;
+                publishDialog(Object.assign({ title: title, scheme: scheme, token: token }, result));
+              },
+              function (error) {
+                stopTicker();
+                if (!stillMine()) return;
+                publishDialog({
+                  status: 'error',
+                  message: String((error && error.message) || error),
+                  title: TEXT.title,
+                  scheme: scheme,
+                  token: token,
+                });
+              },
+            );
           };
 
           /* Icon first, name on hover: the shipped row is icon-only, and a text
