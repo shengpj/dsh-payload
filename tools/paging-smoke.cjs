@@ -170,6 +170,26 @@ const run = async () => {
     expect(Array.isArray(events) && events.length === 0, 'a sourceless binding did not yield an empty window');
   }
 
+  /* h) a completed window stays completed: the second read pages nothing. This is
+        what makes the prefetch worth doing — the click that follows a warm read
+        must not walk the session again. */
+  {
+    const probe = makeBinding();
+    await internals.loadFullWindow(probe.binding);
+    const jumpedOnce = probe.calls.loadThrough.length;
+    const walkedOnce = probe.calls.loadOlder;
+    const events = await internals.loadFullWindow(probe.binding);
+    expect(
+      probe.calls.loadThrough.length === jumpedOnce,
+      'a warm window asked for the jump again (' + jumpedOnce + ' → ' + probe.calls.loadThrough.length + ')',
+    );
+    expect(
+      probe.calls.loadOlder === walkedOnce,
+      'a warm window walked pages again (' + walkedOnce + ' → ' + probe.calls.loadOlder + ')',
+    );
+    expect(events.length === TOTAL, 'a warm window lost events: ' + events.length + ' of ' + TOTAL);
+  }
+
   if (problems) {
     console.log('=== paging smoke FAILED: ' + problems + ' problem(s) ===');
     process.exit(1);

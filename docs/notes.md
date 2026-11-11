@@ -181,3 +181,19 @@
 
 验证：`tools/paging-smoke.cjs` 用假 binding 把六种分页形状跑一遍（有跳跃 / 无跳跃 / 跳跃抛错 / 跳跃空转 / 跳跃后仍有 hasMore / 无 eventSource），断言「有跳跃时 `loadOlder` 调用 0 次、`loadThrough` 恰好一次且参数为 0」，以及三条退回路径都能把窗口读全；`tools/render-smoke.cjs` 的加载态断言扩展到「读数文本 + 转圈存在 + 重建阶段能报出窗口事件数 + 错误态不转圈」。
 
+
+## 秒数还是会停：于是把等待挪出点击路径
+
+按帧计数、转圈、分阶段文案上线后（1.9.8），用户的反馈没变：还是从 0 涨到 1 秒就停住。这说明问题不在计数方式——两种实现（旧的逐页 `setInterval`、新的一次跳跃 + `requestAnimationFrame`）停在同一个位置，恰恰是同一个原因：读取结束前后那一段主线程被占满，浏览器不出帧，屏幕上的文字就冻在那里。数字算得再准，没被画出来就是没被画出来。
+
+所以这次不再改时钟，改**什么时候读**：
+
+- **预读**（`ensurePrefetch`）：操作按钮出现 1.2 秒后开始读窗口，指针移上去（`onMouseEnter`/`onFocus`）立刻开始读。每个 session 只读一次，状态记成 pending/done/skipped/failed。预读的结果不是缓存副本，而是 Host 会话窗口本身——`loadFullWindow` 读完之后 `hasMore` 就是 false，所以随后的点击不再翻页。
+- **点击与预读不重复**：`readWindow` 发现这个 session 正在预读，就 `await` 那个 promise，再照常走一遍（此时窗口已经是完整的，一遍就是 `getSnapshot` + `collectEvents`，3 ms 量级）。
+- **可观测**：`[dsh-payload] prefetch N events in X ms`、`[dsh-payload] window N events in X ms · rebuild Y ms`、`[dsh-payload] ready in Z ms`，以及 rAF 里检测到单帧间隔超过 500 ms 时打的 `main thread blocked for N ms`。下次谁说「慢」，先看这四行，能立刻分清是翻页、重建、首帧渲染还是 App 自己的 publish 风暴。
+
+诚实地记下代价：预读把等待挪到了点击之前，但没有消灭它。`loadThrough(0)` 成功时 Host 会一次性 publish 整个窗口，会话区要重排两万条事件——那一下仍然会顿，而且现在顿在你只是看着对话、还没点按钮的时候。这是 DSH 的 publish 粒度决定的，插件侧只能选择「什么时候」承受，不能选择「是否」承受。选在点击前，是因为那时读者没有在等一个弹框。
+
+为什么不干脆不读全量：一次请求携带的是整段对话，插件拿到的只有事件流（`request/header` 只带 config 和 tools，不带 messages），要还原请求体就必须自己折叠整段历史。少读一页就是静默丢消息，比慢更糟。
+
+验证：`tools/paging-smoke.cjs` 新增第 h 组——同一 binding 连读两次，第二次的 `loadThrough`/`loadOlder` 调用次数不得增加，窗口条数不变。这条正是预读赖以成立的前提：暖窗口再读不该翻页。

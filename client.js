@@ -4533,12 +4533,80 @@ window.__ModuleLoader__.load({
          * loop awaits each round trip in turn. That work happened in `loadFullWindow`
          * below — see its comment for the jump loader that replaces it.
          */
+        /** Per-session prefetch state; see `ensurePrefetch` below. */
+        const PREFETCH = new Map();
+
         const readWindow = async (sessionId) => {
           const sessions = sessionsOf();
           if (!sessions || typeof sessions.binding !== 'function') throw new Error('sessions service unavailable');
           const binding = sessions.binding(sessionId);
           if (!binding) throw new Error('session is not bound');
+          /* A read already on its way (the prefetch) is not repeated: wait for it,
+             then fall through — it left the window complete. */
+          const inFlight = PREFETCH.get(sessionId);
+          if (inFlight && inFlight.status === 'pending') {
+            try {
+              await inFlight.promise;
+            } catch (error) {
+              /* a failed prefetch is not a failed read: walk the window below */
+            }
+          }
           return loadFullWindow(binding);
+        };
+
+        /**
+         * Read the window BEFORE it is asked for.
+         *
+         * Opening a dialog on a long conversation waits for two things: the Host
+         * walking the session back (round trips, ~1 s) and then the app rendering
+         * the pages it just received. Both are unavoidable at SOME point — a
+         * request carries the whole conversation — but neither has to happen while
+         * a reader stares at a modal. `loadThrough` grows the shared Client window,
+         * so once the read has happened every later `readWindow` finds the window
+         * already complete and only re-collects it (milliseconds).
+         *
+         * Triggered a moment after an action button first appears for a session,
+         * i.e. once the reader is looking at that conversation, and once per
+         * session either way: a button that is never pointed at costs nothing.
+         */
+        const ensurePrefetch = (sessionId) => {
+          if (!sessionId) return;
+          const known = PREFETCH.get(sessionId);
+          if (known) return known.promise;
+          const entry = { status: 'pending', ms: 0 };
+          PREFETCH.set(sessionId, entry);
+          const startedAt = monotonicNow();
+          entry.promise = Promise.resolve()
+            .then(() => {
+              const sessions = sessionsOf();
+              if (!sessions || typeof sessions.binding !== 'function') return null;
+              const binding = sessions.binding(sessionId);
+              if (!binding) return null;
+              return loadFullWindow(binding);
+            })
+            .then((events) => {
+              entry.status = events ? 'done' : 'skipped';
+              entry.ms = monotonicNow() - startedAt;
+              if (typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+                console.debug(
+                  '[dsh-payload] prefetch ' +
+                    (events ? events.length + ' events' : 'skipped') +
+                    ' in ' +
+                    entry.ms.toFixed(0) +
+                    ' ms',
+                );
+              }
+              return events;
+            })
+            .catch((error) => {
+              entry.status = 'failed';
+              entry.ms = monotonicNow() - startedAt;
+              if (typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+                console.debug('[dsh-payload] prefetch failed: ' + String((error && error.message) || error));
+              }
+              return null;
+            });
+          return entry.promise;
         };
 
         /**
@@ -4549,7 +4617,9 @@ window.__ModuleLoader__.load({
         const buildTurnForMessage = async (sessionId, messageId, onPhase) => {
           try {
             if (!messageId) throw new Error('no message id');
+            const readStarted = monotonicNow();
             const events = await readWindow(sessionId);
+            const readMs = monotonicNow() - readStarted;
 
             /* Everything below is one long task: locate, rebuild, and then the
                first render of a JSON tree that can be megabytes wide. The caller
@@ -4591,8 +4661,24 @@ window.__ModuleLoader__.load({
               ':' +
               String(firstSeq);
             let built = builtCache.get(cacheKey);
+            const cacheHit = Boolean(built);
+            const buildStarted = monotonicNow();
             if (!built) {
               built = buildTurnCalls(events, spot.turn);
+            }
+            const buildMs = cacheHit ? 0 : monotonicNow() - buildStarted;
+            /* One line per open, so the next "it is slow" report can say WHICH part
+               was slow: reading the window, rebuilding the Turn, or (by subtraction
+               from the total the caller logs) the first render. */
+            if (typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+              console.debug(
+                '[dsh-payload] window ' +
+                  events.length +
+                  ' events in ' +
+                  readMs.toFixed(0) +
+                  ' ms · rebuild ' +
+                  (cacheHit ? 'cached' : buildMs.toFixed(0) + ' ms'),
+              );
             }
             /* Re-insert on a hit too: that is what makes the eviction order the
                reuse order, so the Turn being read right now is the last to go. */
@@ -4642,7 +4728,27 @@ window.__ModuleLoader__.load({
           const triggerRef = React.useRef(null);
           const [tip, setTip] = React.useState(null);
 
+          /* Read the window before anyone asks for it: the first open of a long
+             conversation has to walk the whole session back, and doing that while a
+             modal says "reading… 1 s" is the slow part. The button appears as soon
+             as the reader is looking at this conversation, so a short delay is
+             enough of an intent signal; `ensurePrefetch` keeps it to one read per
+             session and logs what it cost. */
+          React.useEffect(() => {
+            if (!sessionId || typeof setTimeout !== 'function') return undefined;
+            const timer = setTimeout(() => {
+              ensurePrefetch(sessionId);
+            }, 1200);
+            return () => {
+              if (typeof clearTimeout === 'function') clearTimeout(timer);
+            };
+          }, [sessionId]);
+
           const showTip = () => {
+            /* Pointing at the button is the strongest available intent signal, and
+               it arrives before the click does — so the read gets a head start
+               instead of starting on the click and freezing the dialog. */
+            ensurePrefetch(sessionId);
             const node = triggerRef.current;
             if (!node || typeof window === 'undefined') return;
             const rect = node.getBoundingClientRect();
@@ -4693,9 +4799,19 @@ window.__ModuleLoader__.load({
               showLoading(TEXT.readingHistory((elapsed / 1000).toFixed(1)));
             };
             if (typeof requestAnimationFrame === 'function') {
+              let lastFrameAt = startedAt;
               const step = () => {
                 if (!reading) return;
                 frame = requestAnimationFrame(step);
+                const nowAt = monotonicNow();
+                const gap = nowAt - lastFrameAt;
+                lastFrameAt = nowAt;
+                /* A long gap is the honest explanation for a number that has
+                   stopped: the thread was busy, so no frame — and therefore no
+                   text — could be drawn. Recorded rather than guessed at. */
+                if (gap > 500 && typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+                  console.debug('[dsh-payload] main thread blocked for ' + gap.toFixed(0) + ' ms');
+                }
                 tick();
               };
               frame = requestAnimationFrame(step);
