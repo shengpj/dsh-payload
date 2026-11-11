@@ -2752,6 +2752,15 @@ window.__ModuleLoader__.load({
       'background-color:var(--dsh-pl-sb-thumb-active,rgba(127,127,127,.34));',
       'border:2px solid transparent;background-clip:padding-box}',
       '.dsh-pl-scroll::-webkit-scrollbar-corner{background:transparent}',
+      /* Loading spinner. A transform animation is handed to the compositor, so it
+         keeps turning while the main thread is blocked — which is precisely the
+         moment the seconds counter cannot repaint and the dialog looks hung.
+         Declared before the reduced-motion block below, so that block's override
+         wins on source order (a media query adds no specificity). */
+      '.dsh-pl-spin{display:inline-block;flex:none;width:11px;height:11px;box-sizing:border-box;',
+      'border:2px solid currentColor;border-top-color:transparent;border-radius:50%;',
+      'animation:dsh-pl-spin .8s linear infinite}',
+      '@keyframes dsh-pl-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}',
       /* The shipped surfaces drop their transitions when the OS asks for it. */
       '@media (prefers-reduced-motion:reduce){',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb,.dsh-pl-action,.dsh-pl-btn,.dsh-pl-pill,',
@@ -2769,13 +2778,6 @@ window.__ModuleLoader__.load({
       'line-height:16px;cursor:pointer;vertical-align:middle}',
       '.dsh-pl-jump:hover{color:var(--dsw-alias-brand-primary,#2f6fed);',
       'border-color:var(--dsw-alias-brand-primary,#2f6fed)}',
-      /* Loading spinner. A transform animation is handed to the compositor, so it
-         keeps turning while the main thread is blocked — which is precisely the
-         moment the seconds counter cannot repaint and the dialog looks hung. */
-      '.dsh-pl-spin{display:inline-block;flex:none;width:11px;height:11px;box-sizing:border-box;',
-      'border:2px solid currentColor;border-top-color:transparent;border-radius:50%;',
-      'animation:dsh-pl-spin .8s linear infinite}',
-      '@keyframes dsh-pl-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}',
     ].join('');
 
     /** Install the trigger stylesheet once; failure only costs cosmetics. */
