@@ -18,6 +18,12 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
+    /* Shown in the dialog header and logged on load. "Did the new build actually
+       load, or is the browser still running last week's bundle?" has cost real
+       rounds of debugging, so the answer is on screen. Keep in sync with
+       package.json. */
+    const VERSION = '1.10.0';
+
     /** Surface event type -> the role that event contributes to the model request. */
     const SURFACE_ROLES = {
       'system/message': 'system',
@@ -34,12 +40,11 @@ window.__ModuleLoader__.load({
           copy: '复制',
           copied: '已复制',
           loading: '正在读取本轮请求…',
-          readingHistory: (seconds) =>
-            '正在读取整段会话历史 ' +
-            seconds +
-            ' 秒…（长对话第一次打开要把全部历史读进浏览器，同一个会话之后再打开会复用）',
-          rebuilding: (count) =>
-            '历史已读入，正在重建这一轮（窗口内 ' + count + ' 条事件）…这一步在主线程上，进度条不会动',
+          /* No live seconds: the read and the rebuild hold the main thread, so a
+             printed number can only stand still while the app is busy — and a number
+             that stands still is read as a bug. Liveness comes from the spinner. */
+          readingHistory: '正在读取这段对话的历史…',
+          rebuilding: '历史已读入，正在重建这一轮…',
           empty: '这一轮没有记录到模型调用。',
           error: '读取失败：',
           title: '本轮这次调用的请求与回复',
@@ -162,12 +167,10 @@ window.__ModuleLoader__.load({
           copy: 'Copy',
           copied: 'Copied',
           loading: 'Reading this turn’s request…',
-          readingHistory: (seconds) =>
-            'Reading the whole session history — ' +
-            seconds +
-            's… (a long conversation is read in full the first time; later opens reuse it)',
-          rebuilding: (count) =>
-            'History loaded — rebuilding this turn (' + count + ' events in the window)… this step runs on the main thread, so the countdown stops',
+          /* No live seconds: see the Chinese note — a number cannot be repainted
+             while the work it is counting blocks the thread. */
+          readingHistory: 'Reading this conversation’s history…',
+          rebuilding: 'History loaded — rebuilding this turn…',
           empty: 'No model call recorded for this turn.',
           error: 'Read failed: ',
           title: 'Request and reply for this call',
@@ -421,6 +424,17 @@ window.__ModuleLoader__.load({
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
+      },
+      /* The build that is actually running. Small and muted, but present: "is this
+         the new bundle?" should never again be a question answered by guessing. */
+      versionTag: {
+        flex: '0 0 auto',
+        alignSelf: 'baseline',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
+        fontWeight: 400,
+        color: 'var(--dsw-alias-label-tertiary, #8b94a3)',
+        fontVariantNumeric: 'tabular-nums',
       },
       chips: {
         display: 'flex',
@@ -4041,6 +4055,7 @@ window.__ModuleLoader__.load({
           'div',
           { key: 'row-top', style: STYLE.headerRow },
           h('span', { key: 'title', style: STYLE.dialogTitle }, payload.title),
+          h('span', { key: 'version', style: STYLE.versionTag, title: 'dsh-payload ' + VERSION }, VERSION),
           h(
             'div',
             { key: 'actions', style: STYLE.headerActions },
@@ -4438,6 +4453,11 @@ window.__ModuleLoader__.load({
               busy ? h('span', { className: 'dsh-pl-spin', 'aria-hidden': 'true' }) : null,
               h('span', { style: Object.assign({}, STYLE.note, { padding: 0, flex: '1 1 auto', minWidth: 0 }) }, message),
             ),
+            h(
+              'div',
+              { style: Object.assign({}, STYLE.versionTag, { padding: '0 16px 10px', textAlign: 'right' }) },
+              VERSION,
+            ),
           ),
         );
       }
@@ -4738,7 +4758,7 @@ window.__ModuleLoader__.load({
             if (!sessionId || typeof setTimeout !== 'function') return undefined;
             const timer = setTimeout(() => {
               ensurePrefetch(sessionId);
-            }, 1200);
+            }, 300);
             return () => {
               if (typeof clearTimeout === 'function') clearTimeout(timer);
             };
@@ -4769,70 +4789,50 @@ window.__ModuleLoader__.load({
             const scheme = readScheme();
             const token = (dialogToken += 1);
             /* Nothing here is incremental — one request carries the whole
-               conversation, so the read is all-or-nothing — which means the only
-               honest progress signal is elapsed time. A still line reads as a
-               hang, and this is exactly what makes a writer think the button is
-               broken. */
+               conversation, so the read is all-or-nothing — which is why this line
+               does not print a number. The read and the rebuild hold the main
+               thread, so a printed number can only stand still while the work it
+               counts runs, and two readers in a row read a standing number as a
+               broken counter. Liveness is the composited spinner's job; the
+               measurements go to the console, where arriving late costs nothing. */
             const showLoading = (note) =>
               publishDialog({ status: 'loading', title: TEXT.title, scheme: scheme, note: note, token: token });
-            showLoading(null);
+            showLoading(TEXT.readingHistory);
 
             const startedAt = monotonicNow();
-            /* Count on the frame clock. A plain timer keeps queueing updates that
-               cannot be painted while the app is busy rendering the pages arriving
-               from the Host, so the number lags and then stops — the reader saw it
-               sit at "1 秒" — while a frame-clock count is computed at paint time,
-               so whatever is on screen was true when that frame was drawn. The 250 ms
-               bucket keeps it to four updates a second. */
-            let reading = true;
+            /* Still watch the frame clock — not to print anything, but to record
+               how long the thread was gone. A frame interval above half a second is
+               the app rendering the window it just published, and it is the one
+               number that explains an open that "felt stuck". */
+            let watching = true;
             let frame = null;
-            let interval = null;
-            let bucket = -1;
-            const tick = () => {
-              if (!reading) return;
-              const elapsed = monotonicNow() - startedAt;
-              /* A cached re-open lands in tens of ms; do not flash "0.0s". */
-              if (elapsed < 400) return;
-              const next = Math.floor(elapsed / 250);
-              if (next === bucket) return;
-              bucket = next;
-              showLoading(TEXT.readingHistory((elapsed / 1000).toFixed(1)));
-            };
             if (typeof requestAnimationFrame === 'function') {
               let lastFrameAt = startedAt;
               const step = () => {
-                if (!reading) return;
+                if (!watching) return;
                 frame = requestAnimationFrame(step);
                 const nowAt = monotonicNow();
                 const gap = nowAt - lastFrameAt;
                 lastFrameAt = nowAt;
-                /* A long gap is the honest explanation for a number that has
-                   stopped: the thread was busy, so no frame — and therefore no
-                   text — could be drawn. Recorded rather than guessed at. */
                 if (gap > 500 && typeof console !== 'undefined' && console && typeof console.debug === 'function') {
-                  console.debug('[dsh-payload] main thread blocked for ' + gap.toFixed(0) + ' ms');
+                  console.debug('[dsh-payload] no frame drawn for ' + gap.toFixed(0) + ' ms (main thread busy)');
                 }
-                tick();
               };
               frame = requestAnimationFrame(step);
-            } else if (typeof setInterval === 'function') {
-              interval = setInterval(tick, 250);
             }
             const stopTicker = () => {
-              reading = false;
+              watching = false;
               if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
-              if (interval !== null && typeof clearInterval === 'function') clearInterval(interval);
               frame = null;
-              interval = null;
             };
             const stillMine = () => Boolean(dialogPayload) && dialogPayload.token === token;
 
             /* The read is done; the rebuild is a long synchronous task. Stop the
                clock (it cannot move anyway) and say what is happening instead. */
-            const onPhase = (count) => {
+            const onPhase = () => {
               if (!stillMine()) return;
               stopTicker();
-              showLoading(TEXT.rebuilding(typeof count === 'number' ? String(count) : '?'));
+              showLoading(TEXT.rebuilding);
             };
 
             buildTurnForMessage(sessionId, messageId, onPhase).then(
@@ -4930,6 +4930,9 @@ window.__ModuleLoader__.load({
         /* Sit beside the shipped per-message actions (copy, good/bad answer),
            matching the durable assistant message they belong to. */
         ensureActionStyle();
+        if (typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+          console.debug('[dsh-payload] ' + VERSION + ' loaded');
+        }
         ctx.slots.inject('conversation.chat.assistant-actions', () =>
           ctx.slots.register(
             {

@@ -432,32 +432,37 @@ internals.publishDialog({ status: 'error', title: '本轮发送给模型的完�
 const failed = walk(overlay({}));
 expect(failed.text.join(' ').includes('sessions service unavailable'), 'error state did not surface the message');
 
-/* Reading a long session's history takes seconds and has no partial result, so
-   the only honest progress signal is elapsed time; a still line reads as a hang. */
+/* Reading a long session's history takes seconds and has no partial result. The
+   line therefore does NOT print elapsed time: it cannot repaint while the work it
+   counts holds the thread, and a number standing still reads as a broken counter
+   (it was reported as a bug twice). What it must carry instead is a composited
+   spinner, and the build stamp, so "is the new bundle even loaded?" is answerable. */
 internals.publishDialog({
   status: 'loading',
   title: '本轮发送给模型的完整请求',
-  note: '正在读取整段会话历史 3.4 秒…（长对话第一次打开要把全部历史读进浏览器）',
+  note: '正在读取这段对话的历史…',
 });
 const reading = walk(overlay({}));
-expect(reading.text.join(' ').includes('3.4'), 'loading state did not report the elapsed seconds');
-expect(!reading.text.join(' ').includes('正在读取本轮请求'), 'the plain line won over the counted one');
-/* The count cannot be repainted while the main thread rebuilds, so the state
-   needs a composited spinner: a frozen number must not look like a dead dialog. */
+expect(reading.text.join(' ').includes('正在读取这段对话的历史'), 'loading state lost its phase line');
+expect(
+  !/\d\.\d\s*秒|秒…（/u.test(reading.text.join(' ')),
+  'loading state went back to printing elapsed seconds',
+);
 expect(
   reading.classes.some((c) => c.split(/\s+/).includes('dsh-pl-spin')),
   'loading state has no spinner to keep moving while the thread is busy',
 );
+expect(/\b1\.\d+\.\d+\b/u.test(reading.text.join(' ')), 'loading state does not show which build is running');
 
 /* The rebuild is one long synchronous task; it gets its own line so the reader
    knows the wait changed nature rather than stalled. */
 internals.publishDialog({
   status: 'loading',
   title: '本轮发送给模型的完整请求',
-  note: '历史已读入，正在重建这一轮（窗口内 19596 条事件）…',
+  note: '历史已读入，正在重建这一轮…',
 });
 const rebuilding = walk(overlay({}));
-expect(rebuilding.text.join(' ').includes('19596'), 'rebuild phase did not name the window size');
+expect(rebuilding.text.join(' ').includes('正在重建这一轮'), 'rebuild phase did not name the phase');
 expect(
   rebuilding.classes.some((c) => c.split(/\s+/).includes('dsh-pl-spin')),
   'rebuild phase lost the spinner',
