@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
        load, or is the browser still running last week's bundle?" has cost real
        rounds of debugging, so the answer is on screen. Keep in sync with
        package.json. */
-    const VERSION = '1.10.1';
+    const VERSION = '1.10.2';
 
     /** Surface event type -> the role that event contributes to the model request. */
     const SURFACE_ROLES = {
@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
              that stands still is read as a bug. Liveness comes from the spinner. */
           readingHistory: '正在读取这段对话的历史…',
           rebuilding: '历史已读入，正在重建这一轮…',
+          rebuildingProgress: (done, total) => '历史已读入，正在重建这一轮（' + done + '/' + total + ' 次调用）…',
           empty: '这一轮没有记录到模型调用。',
           error: '读取失败：',
           title: '本轮这次调用的请求与回复',
@@ -171,6 +172,8 @@ window.__ModuleLoader__.load({
              while the work it is counting blocks the thread. */
           readingHistory: 'Reading this conversation’s history…',
           rebuilding: 'History loaded — rebuilding this turn…',
+          rebuildingProgress: (done, total) =>
+            'History loaded — rebuilding this turn (' + done + '/' + total + ' calls)…',
           empty: 'No model call recorded for this turn.',
           error: 'Read failed: ',
           title: 'Request and reply for this call',
@@ -1473,15 +1476,21 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Rebuild every model call of one Turn.
+     * Open a rebuild of every model call of one Turn, one step at a time.
      *
      * One step is exactly one request to the model, so `step/start` is the
      * anchor. `request/header` is NOT emitted per call — the Harness records it
      * only when the call configuration changes — so the effective header is
      * carried forward from the nearest earlier record, including ones that sit
      * in previous Turns.
+     *
+     * Returns null when the Turn has no steps, or a job whose `step()` builds one
+     * call and whose `finish()` closes the fold and returns `{turn, calls}`.
+     * The scans that collect the Turn's steps and replies happen here, up front:
+     * they are one pass over the window and there is nothing to interleave them
+     * with.
      */
-    function buildTurnCalls(events, turnNumber, turnSeq, turnStartHint) {
+    function makeTurnBuild(events, turnNumber, turnSeq, turnStartHint) {
       let turnStartSeq = typeof turnStartHint === 'number' ? turnStartHint : -1;
       if (!(turnStartSeq >= 0) && turnNumber !== undefined) {
         for (let i = 0; i < events.length; i += 1) {
@@ -1688,7 +1697,16 @@ window.__ModuleLoader__.load({
       const turnDetailsById = fold.toolDetails;
 
       const calls = [];
-      for (let i = 0; i < steps.length; i += 1) {
+      let stepCursor = 0;
+
+      /* One step's worth of work, as a function instead of a loop body: the click
+         path runs this same code in slices with a painted frame between them (see
+         `buildTurnCallsChunked`). A Turn of a long conversation can carry a
+         hundred calls and take ~190 ms, and a task that long holds the thread
+         through the whole rebuild — no spinner, no progress, nothing. */
+      const buildNextCall = () => {
+        const i = stepCursor;
+        stepCursor += 1;
         const stepInfo = steps[i];
         const nextSeq =
           i + 1 < steps.length
@@ -1850,21 +1868,98 @@ window.__ModuleLoader__.load({
             response: reply,
           },
         });
-      }
+      };
 
-      /* Steps are laid out by their request cut, so the fold stops at the last
-         step's cut — but that step's own tool calls and their results come after
-         it. Consuming the rest of the Turn completes the shared detail index,
-         which is what lets the 响应 tab show a reply's `tool_calls` with its
-         result instead of a `missing` badge. Cuts never rewind, so this is the
-         same pass continuing, not a second scan. */
-      const tailLimit = turnEndSeq >= 0 ? turnEndSeq : Number.MAX_SAFE_INTEGER;
-      while (cursor < events.length && seqOf(events[cursor]) <= tailLimit) {
-        fold.consume(events[cursor]);
-        cursor += 1;
-      }
+      /* The trailing fold — the last step's tool calls and results — and the
+         result, kept together so a caller can run the whole thing at once
+         (`buildTurnCalls`) or one step at a time (`buildTurnCallsChunked`). */
+      const finish = () => {
+        /* Steps are laid out by their request cut, so the fold stops at the last
+           step's cut — but that step's own tool calls and their results come after
+           it. Consuming the rest of the Turn completes the shared detail index,
+           which is what lets the 响应 tab show a reply's `tool_calls` with its
+           result instead of a `missing` badge. Cuts never rewind, so this is the
+           same pass continuing, not a second scan. */
+        const tailLimit = turnEndSeq >= 0 ? turnEndSeq : Number.MAX_SAFE_INTEGER;
+        while (cursor < events.length && seqOf(events[cursor]) <= tailLimit) {
+          fold.consume(events[cursor]);
+          cursor += 1;
+        }
 
-      return { turn: turnNumber, calls: calls };
+        return { turn: turnNumber, calls: calls };
+      };
+
+      return {
+        total: steps.length,
+        built: () => stepCursor,
+        done: () => stepCursor >= steps.length,
+        step: buildNextCall,
+        finish: finish,
+      };
+    }
+
+    /**
+     * Rebuild a whole Turn in one synchronous pass.
+     *
+     * This is the shape every test and the whole-Turn harness use; the Web UI
+     * opens the dialog through `buildTurnCallsChunked` instead.
+     */
+    function buildTurnCalls(events, turnNumber, turnSeq, turnStartHint) {
+      const job = makeTurnBuild(events, turnNumber, turnSeq, turnStartHint);
+      if (!job) return null;
+      while (!job.done()) job.step();
+      return job.finish();
+    }
+
+    /* How much work one slice of a chunked rebuild may do before it hands the
+       thread back. Twelve milliseconds is under one 60 Hz frame, so a painted
+       frame still fits inside the slice budget instead of being starved by it. */
+    const BUILD_SLICE_MS = 12;
+
+    /**
+     * The same rebuild, spread over frames.
+     *
+     * `onProgress(done, total)` runs between slices, which is the whole point:
+     * between two slices the browser *can* paint, so the spinner keeps turning
+     * and the "which call is it on" line keeps moving — the two things a single
+     * 190 ms task makes impossible. `options.abandoned()` is polled at the same
+     * boundaries, so closing the dialog stops the work instead of finishing a
+     * rebuild nobody is waiting for.
+     *
+     * Returns the same object as `buildTurnCalls`, or null when there is nothing
+     * to build (or the caller walked away). `options.sliceMs` exists so a test can
+     * force a yield after every step instead of waiting for a real 12 ms of work.
+     */
+    async function buildTurnCallsChunked(events, turnNumber, turnSeq, turnStartHint, options) {
+      const settings = options && typeof options === 'object' ? options : {};
+      const sliceBudget = typeof settings.sliceMs === 'number' ? settings.sliceMs : BUILD_SLICE_MS;
+      const job = makeTurnBuild(events, turnNumber, turnSeq, turnStartHint);
+      if (!job) return null;
+      let sliceStartedAt = monotonicNow();
+      while (!job.done()) {
+        job.step();
+        if (job.done()) break;
+        if (monotonicNow() - sliceStartedAt < sliceBudget) continue;
+        if (typeof settings.abandoned === 'function') {
+          let gone = false;
+          try {
+            gone = settings.abandoned() === true;
+          } catch (error) {
+            gone = false;
+          }
+          if (gone) return null;
+        }
+        if (typeof settings.onProgress === 'function') {
+          try {
+            settings.onProgress(job.built(), job.total);
+          } catch (error) {
+            /* a broken listener must not strand the rebuild */
+          }
+        }
+        await nextPaint();
+        sliceStartedAt = monotonicNow();
+      }
+      return job.finish();
     }
 
     /**
@@ -2578,6 +2673,7 @@ window.__ModuleLoader__.load({
         collectEvents: collectEvents,
         buildMessages: buildMessages,
         buildTurnCalls: buildTurnCalls,
+        buildTurnCallsChunked: buildTurnCallsChunked,
         builtWeight: builtWeight,
         cacheStats: cacheStats,
         rememberBuilt: rememberBuilt,
@@ -4713,8 +4809,15 @@ window.__ModuleLoader__.load({
          * The action row hands us a durable message id, so resolve that message to
          * its Turn and step first, then rebuild the whole Turn and pre-select the
          * call that produced it.
+         *
+         * `hooks` is how the caller stays in the loop while that happens:
+         * `onPhase()` once the window is in and the rebuild is about to start,
+         * `onProgress(done, total)` between rebuild slices, and `isGone()` for
+         * "the reader closed the dialog, stop working".
          */
-        const buildTurnForMessage = async (sessionId, messageId, onPhase) => {
+        const buildTurnForMessage = async (sessionId, messageId, hooks) => {
+          const settings = hooks && typeof hooks === 'object' ? hooks : {};
+          const onPhase = settings.onPhase;
           try {
             if (!messageId) throw new Error('no message id');
             const readStarted = monotonicNow();
@@ -4765,7 +4868,15 @@ window.__ModuleLoader__.load({
             const cacheHit = Boolean(built);
             const buildStarted = monotonicNow();
             if (!built) {
-              built = buildTurnCalls(events, spot.turn);
+              /* Sliced, not one long task: a Turn of a long conversation can take
+                 ~190 ms to rebuild, and a task that long cannot paint the spinner
+                 or the progress line it is being watched through. Between slices
+                 the browser gets a frame; `isGone` stops the work if the reader
+                 closed the dialog meanwhile. */
+              built = await buildTurnCallsChunked(events, spot.turn, undefined, undefined, {
+                onProgress: settings.onProgress,
+                abandoned: settings.isGone,
+              });
             }
             const buildMs = cacheHit ? 0 : monotonicNow() - buildStarted;
             /* One line per open, so the next "it is slow" report can say WHICH part
@@ -4908,15 +5019,27 @@ window.__ModuleLoader__.load({
             };
             const stillMine = () => Boolean(dialogPayload) && dialogPayload.token === token;
 
-            /* The read is done; the rebuild is a long synchronous task. Stop the
-               clock (it cannot move anyway) and say what is happening instead. */
+            /* The read is done and the rebuild starts. The rebuild is sliced, so
+               the line below can actually be repainted between slices: the count
+               moves because the browser is painting frames now, not because we
+               asked it to while it could not. */
             const onPhase = () => {
               if (!stillMine()) return;
               stopTicker();
               showLoading(TEXT.rebuilding);
             };
+            const onProgress = (done, total) => {
+              if (!stillMine()) return;
+              showLoading(TEXT.rebuildingProgress(done, total));
+            };
 
-            buildTurnForMessage(sessionId, messageId, onPhase).then(
+            buildTurnForMessage(sessionId, messageId, {
+              onPhase: onPhase,
+              onProgress: onProgress,
+              isGone: function isGone() {
+                return !stillMine();
+              },
+            }).then(
               function (result) {
                 stopTicker();
                 /* Closed or replaced while reading: a late result must not pop the

@@ -229,3 +229,21 @@
 
 验证放在 `tools/cache-smoke.cjs`（不需要浏览器）：估算随 Turn 增长且量级正确、40 个超大 Turn 不能全留、重复缓存同一轮不虚增、单个超预算 Turn 独占缓存并清空其余。
 
+
+## 重建为什么要分片（1.10.2）
+
+上一节解决的是「缓存能吃多少内存」，这一节解决的是「重建能吃多久主线程」。
+
+实测：长会话最后一轮（117 次调用、单次请求 6 780 条消息）重建要 189 ms。189 ms 不算慢，问题在于它是**一个不可中断的任务**：`buildTurnCalls` 从第一个 step 循环到最后一个，中间浏览器一帧都画不出来。于是加载态里那个纯 CSS 转圈虽然在转（合成器独立于我），但**文案换不了**——「历史已读入，正在重建这一轮…」这句话要等重建结束才会出现，而那正是最需要它的时候。1.10.0 把秒数删掉之后，这是加载态唯一还剩下的、会卡住的表达。
+
+改法是把循环体从 `for` 里搬出来变成函数：
+
+- `makeTurnBuild(events, turn, …)` 返回一个 job：`{ total, built(), done(), step(), finish() }`。扫描（找出这一轮所有 `step/start` 与回复、初始化 `FoldState`）仍在建立 job 时一次做完——那是一遍顺序扫描，没有可以和它交错的东西。
+- `buildTurnCalls` 变成薄包装：`while (!job.done()) job.step(); return job.finish();`。同步语义一字未改，全部既有测试和 `verify-against-session.cjs` 仍然走这条路——**这一点很重要**：分片是新的执行方式，不是新的算法，所以两者的结果必须逐字节相等，`tools/rebuild-smoke.cjs` 的第一条断言就是 `JSON.stringify(sync) === JSON.stringify(chunked)`。
+- `buildTurnCallsChunked(events, turn, …, { onProgress, abandoned, sliceMs })` 每跑一步就看本片是否已经用掉 12 ms，用完就 `await nextPaint()`（一帧 + 一个宏任务，确保中间真的画过一帧），然后回调 `onProgress(built, total)`。12 ms 是照 60 Hz 的一帧（16.7 ms）留的余量：片要短到「画一帧还来得及」，否则让出的那一帧会被下一片直接吃掉。
+- `abandoned()` 在同一个边界上轮询，返回 true 就 `return null`：关掉弹框后不再把剩下的几十次调用算完。这是分片顺带修掉的一个浪费——以前关闭后那次同步重建照样跑完。
+- 进度行「（12/117 次调用）」不是装饰，它是**分片确实发生了的证据**：只有在浏览器能画帧的时候，这行字才会变。
+
+诚实的代价：分片多花一点总时间（每片一次 rAF，117 次调用大概多 40–50 ms 的调度开销），换来的是可见的进度和可中断。对一次打开弹框的等待来说，这是赚的。另一处代价是 `buildTurnForMessage` 从 `onPhase` 一个参数变成了 hooks 对象 `{ onPhase, onProgress, isGone }`——三个回调都在讲同一件事「调用方要在这段长活里保持话语权」，凑成一个对象比加三个位置参数清楚。
+
+验证：`tools/rebuild-smoke.cjs`（不需要浏览器）四组断言——分片与同步结果全等；进度严格递增且 total 恒定（不强制让出时一片跑完、不上报进度，也不能因此算错）；`abandoned` 后返回 null 且在一两片内停下；`onProgress` 抛错不能把重建带崩。

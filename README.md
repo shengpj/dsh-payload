@@ -115,7 +115,8 @@ git clone https://github.com/shengpj/dsh-payload.git
 
 - 只支持 DSH 的图形界面客户端（纯客户端插件，没有 Host 半边的服务注册）；TUI/CLI 下没有入口。
 - 首次打开某个 Turn 时需要把会话窗口往前读完整（一次请求携带的是整段对话，读一半会静默丢消息）。这一步走 DSH 的会话快照：优先用 `loadThrough(0)` 一次跳到最旧一页（Host 私下翻页、只在结束时 publish 一次，约 200 条一页），拿不到这个能力时才退回 `loadOlder()` 逐页翻。重建结果按「Turn 自己的 seq 区间」缓存，已结束的 Turn 不会再因为会话继续增长而失效。缓存按**内存预算**（约 200 MB，另加 40 条上限）而不是条数淘汰：一个重建好的 Turn 会保留窗口里每一条消息，长会话里均值约 18.5 MB、最宽的一轮约 32 MB（6 780 条消息 / 117 次调用），40 条就是最坏 700 MB 级的常驻内存。现在超出预算时按最近使用逐条淘汰，并且始终保留刚插入的那一条（哪怕它自己就超预算，否则那一轮每次打开都要重建）。重建本身只折叠一次窗口（不再每一步重扫全量事件），6 600 条消息的 Turn 在 Node 里约 170 ms。
-- 加载态只写一句「正在读取这段对话的历史…」，**不显示已耗时秒数**：读窗口和重建都占着主线程，那段时间浏览器不画帧，数字就算涨了也画不到屏幕上，停住的数字只会被当成 bug（这是两轮反馈的来源）。活的信号交给纯 CSS 转圈（合成器动画，主线程卡住也照转），读完之后文案换成「历史已读入，正在重建这一轮…」，让人知道等待换了个性质。
+- 加载态只写一句「正在读取这段对话的历史…」，**不显示已耗时秒数**：读窗口和重建都占着主线程，那段时间浏览器不画帧，数字就算涨了也画不到屏幕上，停住的数字只会被当成 bug（这是两轮反馈的来源）。活的信号交给纯 CSS 转圈（合成器动画，主线程卡住也照转），读完之后文案换成「历史已读入，正在重建这一轮…」。
+- 重建**分片**进行（每片最多约 12 ms，片间让出一帧），所以重建阶段的转圈和那行「（12/117 次调用）」是真在动的：一百多次调用的长轮次原本是一个 ~190 ms 的不可中断任务，期间浏览器一帧都画不出来。分片也让「关掉弹框」能立刻停下重建，而不是等它跑完一个没人看的结果。
 - 加载态右下角和弹框标题旁都显示版本号（如 `1.10.0`），用来回答「我刚才刷新的到底是不是新代码」。
 - 真正把这段等待移出点击路径的是**预读**：操作按钮出现 0.3 秒后（也就是你正在看这段对话时）开始读窗口，指到按钮上（`onMouseEnter`/`onFocus`）会立刻开始读，每个会话只读一次，读的结果就是 Host 的会话窗口本身，所以随后的点击不再翻页、加载态通常一闪而过。代价是那次预读仍在主线程上：预读期间页面可能顿一下（这是 DSH 一次性 publish 整段历史的开销，不是本插件的）。想看每一段各花多少毫秒，打开 DevTools 控制台，会看到 `[dsh-payload] 1.10.0 loaded`、`[dsh-payload] prefetch … ms`、`[dsh-payload] window N events in X ms · rebuild Y ms`、`[dsh-payload] … in Z ms`，以及主线程被占住时打出的 `no frame drawn for N ms`。
 - provider 没上报 `usage` 的调用会显示「未记录到用量」，其余部分照常展示。
@@ -133,6 +134,7 @@ tools/verify-against-session.cjs   无浏览器验证数据管线，并对账每
 tools/render-smoke.cjs             无浏览器渲染冒烟（stub React），跑 15 个场景（含错误边界、工具卡片、响应侧、每步的请求/响应成对切换）
 tools/paging-smoke.cjs             无浏览器分页冒烟：用假 binding 验证「一次跳跃代替逐页发布」及三种退回路径
 tools/cache-smoke.cjs              无浏览器缓存冒烟：重建缓存按字节预算淘汰，重复缓存同一轮不会虚增占用
+tools/rebuild-smoke.cjs            无浏览器重建冒烟：分片结果与同步结果全等、进度严格递增、关闭即放弃
 tools/audit-keys.cjs               静态检查 STYLE/TEXT 键是否还有引用
 tools/asar-extract.cjs             从 app.asar 抽单个文件（查官方样式/类型用）
 tools/build-market-index.mjs       把某个 commit 写进市场索引（发版用）
@@ -148,6 +150,7 @@ node tools/verify-against-session.cjs <log.zstd>  # 或指定日志文件
 node tools/render-smoke.cjs                       # 渲染：15 个场景
 node tools/paging-smoke.cjs                       # 分页：跳跃 / 退回路径
 node tools/cache-smoke.cjs                        # 缓存：字节预算淘汰
+node tools/rebuild-smoke.cjs                      # 重建：分片等价 / 进度 / 放弃
 node tools/audit-keys.cjs                         # 静态：死键必须为 0
 ```
 
