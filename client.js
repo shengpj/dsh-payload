@@ -38,6 +38,8 @@ window.__ModuleLoader__.load({
             '正在读取整段会话历史 ' +
             seconds +
             ' 秒…（长对话第一次打开要把全部历史读进浏览器，同一个会话之后再打开会复用）',
+          rebuilding: (count) =>
+            '历史已读入，正在重建这一轮（窗口内 ' + count + ' 条事件）…这一步在主线程上，进度条不会动',
           empty: '这一轮没有记录到模型调用。',
           error: '读取失败：',
           title: '本轮这次调用的请求与回复',
@@ -164,6 +166,8 @@ window.__ModuleLoader__.load({
             'Reading the whole session history — ' +
             seconds +
             's… (a long conversation is read in full the first time; later opens reuse it)',
+          rebuilding: (count) =>
+            'History loaded — rebuilding this turn (' + count + ' events in the window)… this step runs on the main thread, so the countdown stops',
           empty: 'No model call recorded for this turn.',
           error: 'Read failed: ',
           title: 'Request and reply for this call',
@@ -336,6 +340,17 @@ window.__ModuleLoader__.load({
         transition: 'background-color .12s ease, border-color .12s ease',
       },
       note: {
+        padding: '12px 16px',
+        fontSize: T.font.caption,
+        lineHeight: '18px',
+        color: 'var(--dsw-alias-label-secondary, #5b6472)',
+      },
+      /* Same voice as `note`, but a row: spinner beside the text, so the loading
+         state has something that keeps moving even when text cannot be painted. */
+      loadingRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
         padding: '12px 16px',
         fontSize: T.font.caption,
         lineHeight: '18px',
@@ -999,6 +1014,41 @@ window.__ModuleLoader__.load({
       }
       if (BODY_BYTES) BODY_BYTES.set(value, bytes);
       return bytes;
+    }
+
+    /**
+     * Wait long enough for the browser to actually paint.
+     *
+     * The loading dialog is worthless if the frame that would show it never gets
+     * committed: opening one request means reading every page of the session and
+     * then rebuilding the Turn, all of it queued behind whatever the app is
+     * already rendering, so a note published just before that work can stay
+     * invisible until the work is over. One animation frame plus a macrotask is
+     * the shortest wait that guarantees a paint in between — a bare
+     * `setTimeout(0)` can be drained before the frame is drawn, and a bare
+     * `requestAnimationFrame` fires before it.
+     */
+    function nextPaint() {
+      return new Promise((resolve) => {
+        const macrotask = () => {
+          if (typeof setTimeout === 'function') setTimeout(resolve, 0);
+          else resolve();
+        };
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(macrotask);
+        else macrotask();
+      });
+    }
+
+    /** `performance.now()` where it exists: the load timer must not jump on a clock change. */
+    function monotonicNow() {
+      try {
+        if (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') {
+          return performance.now();
+        }
+      } catch (err) {
+        /* fall through */
+      }
+      return Date.now();
     }
 
     /**
@@ -2706,7 +2756,10 @@ window.__ModuleLoader__.load({
       '@media (prefers-reduced-motion:reduce){',
       '.dsh-pl-scroll::-webkit-scrollbar-thumb,.dsh-pl-action,.dsh-pl-btn,.dsh-pl-pill,',
       '.dsh-pl-side,.dsh-pl-step,.dsh-pl-jump{transition:none}',
-      '.dsh-pl-tip{animation:none}}',
+      '.dsh-pl-tip{animation:none}',
+      '.dsh-pl-spin{animation:dsh-pl-pulse 1.6s ease-in-out infinite}',
+      '@keyframes dsh-pl-pulse{0%,100%{opacity:.4}50%{opacity:.95}}}',
+
       /* Jump-to-conversation chip: always in flow, so a row never shifts on hover. */
       '.dsh-pl-jump{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:0 8px;',
       'height:20px;box-sizing:border-box;',
@@ -2716,6 +2769,13 @@ window.__ModuleLoader__.load({
       'line-height:16px;cursor:pointer;vertical-align:middle}',
       '.dsh-pl-jump:hover{color:var(--dsw-alias-brand-primary,#2f6fed);',
       'border-color:var(--dsw-alias-brand-primary,#2f6fed)}',
+      /* Loading spinner. A transform animation is handed to the compositor, so it
+         keeps turning while the main thread is blocked — which is precisely the
+         moment the seconds counter cannot repaint and the dialog looks hung. */
+      '.dsh-pl-spin{display:inline-block;flex:none;width:11px;height:11px;box-sizing:border-box;',
+      'border:2px solid currentColor;border-top-color:transparent;border-radius:50%;',
+      'animation:dsh-pl-spin .8s linear infinite}',
+      '@keyframes dsh-pl-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}',
     ].join('');
 
     /** Install the trigger stylesheet once; failure only costs cosmetics. */
@@ -4335,6 +4395,11 @@ window.__ModuleLoader__.load({
         /* `note` is the load in progress, counted in seconds: the reader said
            "first open of a long conversation hangs", and a still line cannot be
            told apart from a hang. */
+        /* `note` is the work in progress: while reading it counts seconds, and the
+           reader said a still line "looks stuck". A spinner is added because the
+           text cannot be repainted while the main thread is busy — the spinner is
+           composited and keeps turning, so a frozen number is not mistaken for a
+           dead dialog. */
         const message = payload.note
           ? payload.note
           : payload.status === 'error'
@@ -4342,6 +4407,7 @@ window.__ModuleLoader__.load({
             : payload.status === 'empty'
               ? TEXT.empty
               : TEXT.loading;
+        const busy = payload.status === 'loading';
         inner = h(
           'div',
           { style: Object.assign({}, STYLE.dialog, { height: 'auto', maxHeight: '40vh' }), onClick: (event) => event.stopPropagation() },
@@ -4361,7 +4427,16 @@ window.__ModuleLoader__.load({
               '✕',
             ),
           ),
-          h('div', { style: STYLE.dialogBody }, h('div', { style: STYLE.note }, message)),
+          h(
+            'div',
+            { style: STYLE.dialogBody },
+            h(
+              'div',
+              { style: STYLE.loadingRow },
+              busy ? h('span', { className: 'dsh-pl-spin', 'aria-hidden': 'true' }) : null,
+              h('span', { style: Object.assign({}, STYLE.note, { padding: 0, flex: '1 1 auto', minWidth: 0 }) }, message),
+            ),
+          ),
         );
       }
 
@@ -4469,10 +4544,25 @@ window.__ModuleLoader__.load({
          * its Turn and step first, then rebuild the whole Turn and pre-select the
          * call that produced it.
          */
-        const buildTurnForMessage = async (sessionId, messageId) => {
+        const buildTurnForMessage = async (sessionId, messageId, onPhase) => {
           try {
             if (!messageId) throw new Error('no message id');
             const events = await readWindow(sessionId);
+
+            /* Everything below is one long task: locate, rebuild, and then the
+               first render of a JSON tree that can be megabytes wide. The caller
+               cannot repaint the seconds counter once that starts, so announce the
+               phase first and give the browser a frame to paint it — a wait that
+               says what it is doing reads as progress, a frozen counter reads as
+               a hang. */
+            if (typeof onPhase === 'function') {
+              try {
+                onPhase(events.length);
+              } catch (error) {
+                /* a broken listener must not break the read */
+              }
+              await nextPaint();
+            }
 
             const spot = locateMessage(events, messageId);
             if (!spot) return { status: 'empty' };
@@ -4578,32 +4668,66 @@ window.__ModuleLoader__.load({
             const showLoading = (note) =>
               publishDialog({ status: 'loading', title: TEXT.title, scheme: scheme, note: note, token: token });
             showLoading(null);
-            const startedAt = Date.now();
-            const ticker =
-              typeof setInterval === 'function'
-                ? setInterval(() => {
-                    const elapsed = Date.now() - startedAt;
-                    /* A cached re-open lands in tens of ms; do not flash "0.0s". */
-                    if (elapsed < 400) return;
-                    /* A read that never settles must not tick for ever. */
-                    if (elapsed > 180000) {
-                      clearInterval(ticker);
-                      return;
-                    }
-                    showLoading(TEXT.readingHistory((elapsed / 1000).toFixed(1)));
-                  }, 250)
-                : null;
+
+            const startedAt = monotonicNow();
+            /* Count on the frame clock. A plain timer keeps queueing updates that
+               cannot be painted while the app is busy rendering the pages arriving
+               from the Host, so the number lags and then stops — the reader saw it
+               sit at "1 秒" — while a frame-clock count is computed at paint time,
+               so whatever is on screen was true when that frame was drawn. The 250 ms
+               bucket keeps it to four updates a second. */
+            let reading = true;
+            let frame = null;
+            let interval = null;
+            let bucket = -1;
+            const tick = () => {
+              if (!reading) return;
+              const elapsed = monotonicNow() - startedAt;
+              /* A cached re-open lands in tens of ms; do not flash "0.0s". */
+              if (elapsed < 400) return;
+              const next = Math.floor(elapsed / 250);
+              if (next === bucket) return;
+              bucket = next;
+              showLoading(TEXT.readingHistory((elapsed / 1000).toFixed(1)));
+            };
+            if (typeof requestAnimationFrame === 'function') {
+              const step = () => {
+                if (!reading) return;
+                frame = requestAnimationFrame(step);
+                tick();
+              };
+              frame = requestAnimationFrame(step);
+            } else if (typeof setInterval === 'function') {
+              interval = setInterval(tick, 250);
+            }
             const stopTicker = () => {
-              if (ticker !== null && typeof clearInterval === 'function') clearInterval(ticker);
+              reading = false;
+              if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+              if (interval !== null && typeof clearInterval === 'function') clearInterval(interval);
+              frame = null;
+              interval = null;
             };
             const stillMine = () => Boolean(dialogPayload) && dialogPayload.token === token;
 
-            buildTurnForMessage(sessionId, messageId).then(
+            /* The read is done; the rebuild is a long synchronous task. Stop the
+               clock (it cannot move anyway) and say what is happening instead. */
+            const onPhase = (count) => {
+              if (!stillMine()) return;
+              stopTicker();
+              showLoading(TEXT.rebuilding(typeof count === 'number' ? String(count) : '?'));
+            };
+
+            buildTurnForMessage(sessionId, messageId, onPhase).then(
               function (result) {
                 stopTicker();
                 /* Closed or replaced while reading: a late result must not pop the
                    dialog back open. */
                 if (!stillMine()) return;
+                if (typeof console !== 'undefined' && console && typeof console.debug === 'function') {
+                  console.debug(
+                    '[dsh-payload] ' + result.status + ' in ' + (monotonicNow() - startedAt).toFixed(0) + ' ms',
+                  );
+                }
                 const built = result.status === 'ready' && result.data ? result.data : null;
                 const title = built
                   ? TEXT.title +

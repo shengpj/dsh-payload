@@ -442,6 +442,32 @@ internals.publishDialog({
 const reading = walk(overlay({}));
 expect(reading.text.join(' ').includes('3.4'), 'loading state did not report the elapsed seconds');
 expect(!reading.text.join(' ').includes('正在读取本轮请求'), 'the plain line won over the counted one');
+/* The count cannot be repainted while the main thread rebuilds, so the state
+   needs a composited spinner: a frozen number must not look like a dead dialog. */
+expect(
+  reading.classes.some((c) => c.split(/\s+/).includes('dsh-pl-spin')),
+  'loading state has no spinner to keep moving while the thread is busy',
+);
+
+/* The rebuild is one long synchronous task; it gets its own line so the reader
+   knows the wait changed nature rather than stalled. */
+internals.publishDialog({
+  status: 'loading',
+  title: '本轮发送给模型的完整请求',
+  note: '历史已读入，正在重建这一轮（窗口内 19596 条事件）…',
+});
+const rebuilding = walk(overlay({}));
+expect(rebuilding.text.join(' ').includes('19596'), 'rebuild phase did not name the window size');
+expect(
+  rebuilding.classes.some((c) => c.split(/\s+/).includes('dsh-pl-spin')),
+  'rebuild phase lost the spinner',
+);
+
+/* An error is not busy: it must not keep a spinner turning. */
+expect(
+  !failed.classes.some((c) => c.split(/\s+/).includes('dsh-pl-spin')),
+  'error state should not animate a spinner',
+);
 
 internals.publishDialog(null);
 
