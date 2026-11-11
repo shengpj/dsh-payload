@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
        load, or is the browser still running last week's bundle?" has cost real
        rounds of debugging, so the answer is on screen. Keep in sync with
        package.json. */
-    const VERSION = '1.10.0';
+    const VERSION = '1.10.1';
 
     /** Surface event type -> the role that event contributes to the model request. */
     const SURFACE_ROLES = {
@@ -2578,6 +2578,9 @@ window.__ModuleLoader__.load({
         collectEvents: collectEvents,
         buildMessages: buildMessages,
         buildTurnCalls: buildTurnCalls,
+        builtWeight: builtWeight,
+        cacheStats: cacheStats,
+        rememberBuilt: rememberBuilt,
         diffRequests: diffRequests,
         summarizeSources: summarizeSources,
         byteLength: byteLength,
@@ -2672,25 +2675,102 @@ window.__ModuleLoader__.load({
 
     /** Rebuilding a payload walks the whole window, so keep it per (session, turn, window end). */
     const builtCache = new Map();
+    /*
+     * Two caps, because until now there was one and it was blind: a rebuilt Turn
+     * of a long conversation keeps every message of the window alive (measured
+     * ~18.5 MB per Turn on a 21 k-record window; the widest Turn, 6 780 messages
+     * across 117 calls, costs ~32 MB), so "40 entries" can mean three quarters of
+     * a gigabyte of retained heap — enough for the browser to start collecting
+     * while the reader is scrolling what was just opened.
+     *   - entries: still bounded, so a session full of tiny Turns cannot pile up
+     *     thousands of map entries;
+     *   - bytes: the cap that matters. The oldest entries go until the cache
+     *     fits its budget.
+     */
     const BUILT_CACHE_LIMIT = 40;
+    const BUILT_CACHE_BYTES = 200 * 1024 * 1024;
+    let builtCacheBytes = 0;
+
+    /**
+     * Roughly how many bytes one rebuilt Turn keeps alive.
+     *
+     * Not a measurement — a cheap estimate, and a deliberately pessimistic one.
+     * The strings and message objects are SHARED between calls (each call's
+     * `messages` is a prefix of the next), so only the widest array is walked and
+     * what stays per-call is its own array and request wrapper. Counting payload
+     * at two bytes per UTF-16 code unit over-states ASCII, and the 1.2 factor on
+     * top covers the bookkeeping this walk does not visit (per-message `track`
+     * and `links` arrays, each call's source accumulators).
+     *
+     * Calibrated against the real thing: on a 21 k-record session the estimate
+     * landed at 1.03–1.65× the heap a Turn actually retained, so the budget errs
+     * towards evicting early rather than too late.
+     */
+    function builtWeight(built) {
+      const calls = built && Array.isArray(built.calls) ? built.calls : [];
+      let slots = 0;
+      let widest = null;
+      for (let i = 0; i < calls.length; i += 1) {
+        const request = calls[i] && calls[i].request ? calls[i].request : null;
+        const messages = request && Array.isArray(request.messages) ? request.messages : [];
+        slots += messages.length;
+        if (!widest || messages.length > widest.length) widest = messages;
+      }
+      let bytes = slots * 8 + calls.length * 1024;
+      if (widest) {
+        for (let i = 0; i < widest.length; i += 1) {
+          const message = widest[i];
+          if (!message || typeof message !== 'object') continue;
+          bytes += 160;
+          const content = message.content;
+          if (typeof content === 'string') bytes += content.length * 2;
+          else if (Array.isArray(content)) {
+            for (let j = 0; j < content.length; j += 1) {
+              const part = content[j];
+              if (part && typeof part.text === 'string') bytes += part.text.length * 2;
+            }
+          }
+          if (Array.isArray(message.tool_calls)) bytes += message.tool_calls.length * 256;
+        }
+      }
+      return Math.round(bytes * 1.2);
+    }
+
+    /** What the cache currently holds, so a test can assert the budget instead of trusting it. */
+    function cacheStats() {
+      return { entries: builtCache.size, bytes: builtCacheBytes, budget: BUILT_CACHE_BYTES };
+    }
 
     /*
      * Cache a rebuild, keyed so a Turn that is still growing cannot serve stale
      * calls.
      *
-     * Eviction is least-recently-used, not "clear all 40". A rebuilt Turn holds
-     * every message of the conversation, so a wipe is a real re-read of the whole
-     * window; flipping between two Turns in a long session used to be able to
-     * throw away everything and rebuild from scratch. Re-inserting refreshes
-     * recency, so a Turn opened twice in a row stays warm.
+     * Eviction is least-recently-used under both caps above, not "clear all 40".
+     * A rebuilt Turn holds every message of the conversation, so a wipe is a real
+     * re-read of the whole window; flipping between two Turns in a long session
+     * used to be able to throw away everything and rebuild from scratch.
+     * Re-inserting refreshes recency, so a Turn opened twice in a row stays warm.
+     * The cache always keeps the entry just inserted, even when that single Turn
+     * is over budget — dropping it would make every open of that Turn a rebuild.
      */
     function rememberBuilt(key, built) {
-      if (builtCache.has(key)) builtCache.delete(key);
-      builtCache.set(key, built);
-      while (builtCache.size > BUILT_CACHE_LIMIT) {
+      const known = builtCache.get(key);
+      if (known) {
+        builtCacheBytes -= known.weight;
+        builtCache.delete(key);
+      }
+      const weight = builtWeight(built);
+      builtCache.set(key, { built: built, weight: weight });
+      builtCacheBytes += weight;
+      while (
+        builtCache.size > 1 &&
+        (builtCache.size > BUILT_CACHE_LIMIT || builtCacheBytes > BUILT_CACHE_BYTES)
+      ) {
         const oldest = builtCache.keys().next();
         if (oldest.done) break;
+        const entry = builtCache.get(oldest.value);
         builtCache.delete(oldest.value);
+        builtCacheBytes -= entry && typeof entry.weight === 'number' ? entry.weight : 0;
       }
     }
 
@@ -4680,7 +4760,8 @@ window.__ModuleLoader__.load({
               String(spanEnd) +
               ':' +
               String(firstSeq);
-            let built = builtCache.get(cacheKey);
+            const cached = builtCache.get(cacheKey);
+            let built = cached ? cached.built : null;
             const cacheHit = Boolean(built);
             const buildStarted = monotonicNow();
             if (!built) {
