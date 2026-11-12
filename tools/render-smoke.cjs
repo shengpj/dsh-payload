@@ -162,6 +162,8 @@ function render(node, sink) {
   /* Inline styles carry the "new since the previous call" marks (a dashed rail
      on each fresh message), so keep them for assertions. */
   if (node.props && node.props.style && typeof node.props.style === 'object') sink.styles.push(node.props.style);
+  /* DOM ids are the pane's scroll anchors (see DialogBody's reveal effect). */
+  if (node.props && typeof node.props.id === 'string') sink.ids.push(node.props.id);
   sink.tags.push(String(node.type));
   const siblings = node.props.children;
   const seen = new Set();
@@ -176,7 +178,7 @@ function render(node, sink) {
 }
 
 function walk(element) {
-  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [], buttons: [], styles: [] };
+  const sink = { text: [], classes: [], tags: [], tips: [], dupeKeys: [], toggles: [], buttons: [], styles: [], ids: [] };
   render(element, sink);
   return sink;
 }
@@ -539,6 +541,12 @@ expect(!/消失|gone/.test(diffedText), 'removed pill should not appear when not
    two messages (index 7 and 8 of a 9-message payload). */
 const rails = diffed.styles.filter((style) => String(style.borderLeft).includes('dashed'));
 expect(rails.length === 2, 'expected 2 dashed rails for 2 appended messages, got ' + rails.length);
+/* The boundary line is where the pane must land when the reader picks this
+   step: exactly one such anchor per document, on the rule above the additions. */
+const anchors = (sink) => sink.ids.filter((id) => id === 'dsh-pl-diff').length;
+expect(anchors(diffed) === 1, 'expected one scroll anchor at the diff boundary, got ' + anchors(diffed));
+expect(anchors(firstCall) === 0, 'a first call has no boundary to anchor to, got ' + anchors(firstCall));
+expect(anchors(sourced) === 1, 'the Turn boundary should be the anchor when there is no diff, got ' + anchors(sourced));
 expect(
   diffed.text.join('').includes('8'),
   'the appended messages lost their array index',
@@ -1002,9 +1010,31 @@ expect(!replyOpen(backSink), 'switching back to 请求 did not restore the reque
 expect(sourcePanelVisible(backSink), 'request source panel missing after switching back');
 expect(/messages/.test(backSink.text.join(' ')), 'the JSON tree is gone after switching back');
 
+/* p) The pane's landing place: every step switch leaves exactly one anchor in the
+      request document (so DialogBody has somewhere to scroll), and the response
+      half has none — it carries no messages array. */
+const anchorCount = (sink) => sink.ids.filter((id) => id === 'dsh-pl-diff').length;
+expect(anchorCount(secondSink) === 1, 'step #2 has no scroll anchor on its request, got ' + anchorCount(secondSink));
+expect(anchorCount(afterSink) === 0, 'the response half must not carry a request anchor, got ' + anchorCount(afterSink));
+expect(anchorCount(backSink) === 1, 'coming back to 请求 lost the anchor, got ' + anchorCount(backSink));
+
+/* The arithmetic behind that scroll, without a browser: a quarter of a tall
+   viewport is the air above the line, a fixed 24 px in a short one, never
+   negative, and it accounts for the pane already being scrolled. */
+const rectAt = (top) => ({ getBoundingClientRect: () => ({ top: top }) });
+const paneAt = (scrollTop, clientHeight, top) => ({
+  scrollTop: scrollTop,
+  clientHeight: clientHeight,
+  getBoundingClientRect: () => ({ top: top }),
+});
+expect(internals.revealTop(paneAt(0, 800, 0), rectAt(1000)) === 800, 'tall pane: expected 1000 - 25% of 800');
+expect(internals.revealTop(paneAt(0, 60, 0), rectAt(1000)) === 976, 'short pane: expected 1000 - 24');
+expect(internals.revealTop(paneAt(0, 800, 0), rectAt(20)) === 0, 'a line near the top must not scroll negative');
+expect(internals.revealTop(paneAt(500, 60, 0), rectAt(300)) === 776, 'an already-scrolled pane must add its offset');
+
 /* ---------------------------------------------------------------- reporting */
 
-console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=pane-sides');
+console.log('dialog smoke: a=single b=three c=twenty d=scoped e=empty g=overlay h=turn-split i=sources j=diff k=timeline l=boundary m=tool-cards n=response o=pane-sides p=scroll-anchor');
 if (problems.length === 0) {
   console.log('=== render smoke ok: 15 scenarios, no problem(s) ===');
 } else {

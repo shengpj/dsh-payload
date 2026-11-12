@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
        load, or is the browser still running last week's bundle?" has cost real
        rounds of debugging, so the answer is on screen. Keep in sync with
        package.json. */
-    const VERSION = '1.10.2';
+    const VERSION = '1.10.3';
 
     /** Surface event type -> the role that event contributes to the model request. */
     const SURFACE_ROLES = {
@@ -2686,6 +2686,7 @@ window.__ModuleLoader__.load({
         callIndexForStep: callIndexForStep,
         describeMessage: describeMessage,
         DialogBody: DialogBody,
+        revealTop: revealTop,
         /* The boundary is declared after this hook (it needs the classes above),
            so hand out a thunk instead of touching the class early. */
         boundary: function boundary() {
@@ -2767,6 +2768,36 @@ window.__ModuleLoader__.load({
           /* nothing else to do */
         }
       }
+    }
+
+    /**
+     * Where the payload pane's scrollTop should land to reveal `target`.
+     *
+     * Pure arithmetic, kept out of the effect that uses it so it can be asserted
+     * without a browser: 24 px of air is right in a short pane and far too little
+     * in a tall one, a quarter of the viewport is right in a tall pane and too
+     * much in a short one, and the result never goes negative.
+     */
+    function revealTop(node, target) {
+      const height = node && typeof node.clientHeight === 'number' ? node.clientHeight : 0;
+      const air = Math.max(24, height * 0.25);
+      const base = node && typeof node.scrollTop === 'number' ? node.scrollTop : 0;
+      /* Measure both boxes in one pass: a difference of client rects does not care
+         which ancestor happens to be positioned, while `offsetTop` would silently
+         be relative to whichever one is. */
+      let delta = null;
+      if (
+        node &&
+        target &&
+        typeof node.getBoundingClientRect === 'function' &&
+        typeof target.getBoundingClientRect === 'function'
+      ) {
+        delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top;
+      } else if (node && target && typeof target.offsetTop === 'number' && typeof node.offsetTop === 'number') {
+        delta = target.offsetTop - node.offsetTop;
+      }
+      const top = delta === null ? 0 : base + delta - air;
+      return top > 0 ? top : 0;
     }
 
     /** Rebuilding a payload walks the whole window, so keep it per (session, turn, window end). */
@@ -3437,7 +3468,11 @@ window.__ModuleLoader__.load({
       const focusBand = props.focus === true ? STYLE.jsonFocus : null;
       const wrapStyle = props.focus === true ? Object.assign({}, band, focusBand) : band;
       const wrap = (style, node) => (style ? h('div', { style: style }, node) : node);
-      const focusId = props.focus === true ? 'dsh-pl-focus' : undefined;
+      /* A DOM id on one row per document, so DialogBody can put the pane on it
+         after a step switch. Focus wins: the dialog may also be opened from a
+         specific message, and that message is the more precise destination. */
+      const focusId =
+        props.focus === true ? 'dsh-pl-focus' : typeof props.anchorId === 'string' ? props.anchorId : undefined;
       /* Forwarded down to the `messages` array, which lives one level below the
          request root. */
       const childProps = {};
@@ -3587,6 +3622,15 @@ window.__ModuleLoader__.load({
       const focusKey = props.focusKey;
       const markFocus = (link) => (focusKey && link && link.key === focusKey ? true : false);
       if (messagesArray && (split || diffInfo)) {
+        /* Where this step's own additions begin — the line the pane lands on when
+           the reader picks another step, because that boundary is the reason to
+           click a step at all. A later call's addition starts at the diff prefix;
+           the first call of a Turn has no diff, so its "new" content starts where
+           the Turn's own messages do. */
+        const sepIndex = freshStart >= 0 && freshStart >= historyEnd ? freshStart : -1;
+        /* No diff and no Turn boundary means the whole array is this Turn's own
+           content, so the top of the pane already is the right place. */
+        const rowAnchorIndex = sepIndex >= 0 ? -1 : historyEnd > 0 && historyEnd < value.length ? historyEnd : -1;
         const tail = [];
         for (let index = historyEnd; index < value.length; index += 1) {
           const link = links ? links[index] || null : null;
@@ -3595,7 +3639,11 @@ window.__ModuleLoader__.load({
             tail.push(
               h(
                 'div',
-                { key: 'fresh-sep', style: Object.assign({}, STYLE.jsonFreshSep, { color: pal.freshBorder }) },
+                {
+                  key: 'fresh-sep',
+                  id: 'dsh-pl-diff',
+                  style: Object.assign({}, STYLE.jsonFreshSep, { color: pal.freshBorder }),
+                },
                 /* The boundary the reader came for: everything above came from the
                    previous call, everything below was appended by this one. */
                 TEXT.diffBoundary +
@@ -3623,6 +3671,7 @@ window.__ModuleLoader__.load({
                   pal: pal,
                   current: !fresh,
                   fresh: fresh,
+                  anchorId: index === rowAnchorIndex ? 'dsh-pl-diff' : undefined,
                   jump: link,
                   onJump: onJump,
                   focus: markFocus(link),
@@ -4020,22 +4069,31 @@ window.__ModuleLoader__.load({
         totals.output += itemUsage.output || 0;
       }
 
-      /* A new call or a different expand mode is a different document: start at
-         the top — unless this dialog was opened from a specific message, in
-         which case land on that message's own line instead. */
+      /* Put one line in view with a little air above it, without yanking the
+         whole pane: the closest scrollable ancestor is the body itself. */
+      const reveal = (node, target) => {
+        node.scrollTop = revealTop(node, target);
+      };
+
+      /* A new call or a different expand mode is a different document: land on
+         the line the reader came for. Two candidates, in order: the message this
+         dialog was opened from (most precise), then the boundary where the
+         selected step's own additions start — clicking a step is a question about
+         what that step added, so answering it at the top of a 6 700-message array
+         would be answering a different question. Without either mark, start at
+         the top. */
       React.useEffect(
         () => {
           const node = bodyRef.current;
           if (!node) return;
-          if (typeof payload.focusKey === 'string' && typeof document !== 'undefined' && document) {
+          const canLook = typeof document !== 'undefined' && Boolean(document);
+          if (canLook && typeof payload.focusKey === 'string') {
             const target = document.getElementById('dsh-pl-focus');
-            if (target) {
-              /* Keep it in view with a little air above, without yanking the
-                 whole pane: the closest scrollable ancestor is the body. */
-              const top = target.offsetTop - Math.max(24, node.clientHeight * 0.25);
-              node.scrollTop = top > 0 ? top : 0;
-              return;
-            }
+            if (target) return reveal(node, target);
+          }
+          if (canLook) {
+            const target = document.getElementById('dsh-pl-diff');
+            if (target) return reveal(node, target);
           }
           node.scrollTop = 0;
         },
